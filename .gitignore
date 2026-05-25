@@ -1,3 +1,61 @@
+# =============================================================================
+# Sparse4D-V3 .gitignore
+# =============================================================================
+
+# ---------- Python ----------
 *.pyc
-*.npy
+__pycache__/
+*.egg-info/
+*.egg
+.eggs/
+
+# ---------- Virtual environments ----------
+.venv/
+venv/
+env/
+.env
+
+# ---------- Compiled CUDA / C++ extensions ----------
+build/
+*.so
+*.o
+*.a
+*.cu.o
+
+# ---------- Model / data / cache (large binary files) ----------
 *.pth
+*.pt
+*.ckpt
+*.bin
+*.npy
+*.npz
+*.pkl
+*.h5
+
+# ---------- Datasets (symlinks / preprocessed) ----------
+data/
+ckpt/
+
+# ---------- Training / eval output ----------
+work_dirs/
+*.log
+*.log.json
+tf_logs/
+wandb/
+runs/
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+
+# ---------- Misc ----------
+tmp/
+temp/
+*.swp
+*.swo
+*~
