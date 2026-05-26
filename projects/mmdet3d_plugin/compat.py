@@ -38,8 +38,13 @@ def _patched_merge_event_dataframes(
 ):
     """Replacement for `MOTAccumulatorCustom.merge_event_dataframes` (pandas 2.x safe).
 
-    与上游唯一的差异是把 `r = r.append(copy)` 换成 `r = pd.concat([r, copy])`,
-    其余逻辑(frame / OId / HId 重映射)与上游 nuscenes-devkit v1.1.x 完全一致。
+    与上游 nuscenes-devkit v1.1.x 的差异:
+      1. `r.append(copy)` → `pd.concat(...)` (pandas 2.0 移除了 DataFrame.append)
+      2. `copy.index.map(lambda)` 后显式 `MultiIndex.from_tuples` 重建 MultiIndex —
+         pandas 2.x 下 MultiIndex.map 不再自动保持 MultiIndex,会退化成 Index of tuples,
+         导致下一轮 `get_level_values(0).max() + 1` 抛 `TypeError: tuple + int`
+      3. 跳过空 DataFrame 的 concat 以避免 pandas 2.x 的 FutureWarning
+    其余逻辑(frame / OId / HId 重映射)与上游完全一致。
     """
     from nuscenes.eval.tracking.mot import MOTAccumulatorCustom
 
@@ -56,13 +61,18 @@ def _patched_merge_event_dataframes(
         infos = {}
 
         if update_frame_indices:
+            # r 为空时 .max() 返回 NaN,后续 NaN+1 仍为 NaN,被 np.isnan 兜底为 0
+            level0 = r.index.get_level_values(0)
             next_frame_id = max(
-                r.index.get_level_values(0).max() + 1,
-                r.index.get_level_values(0).unique().shape[0],
+                (level0.max() + 1) if len(level0) > 0 else 0,
+                level0.unique().shape[0],
             )
-            if np.isnan(next_frame_id):
+            if isinstance(next_frame_id, float) and np.isnan(next_frame_id):
                 next_frame_id = 0
-            copy.index = copy.index.map(lambda x: (x[0] + next_frame_id, x[1]))
+            if len(copy.index) > 0:
+                names = copy.index.names
+                shifted = [(x[0] + next_frame_id, x[1]) for x in copy.index]
+                copy.index = pd.MultiIndex.from_tuples(shifted, names=names)
             infos["frame_offset"] = next_frame_id
 
         if update_oids:
@@ -79,7 +89,10 @@ def _patched_merge_event_dataframes(
             copy["HId"] = copy["HId"].map(lambda x: hid_map[x], na_action="ignore")
             infos["hid_map"] = hid_map
 
-        r = pd.concat([r, copy])
+        if len(r) == 0:
+            r = copy
+        elif len(copy) > 0:
+            r = pd.concat([r, copy])
         mapping_infos.append(infos)
 
     if return_mappings:
