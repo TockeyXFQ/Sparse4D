@@ -1,0 +1,70 @@
+---
+description: Commit message format (Conventional Commits 1.0)
+alwaysApply: true
+---
+
+# 提交信息规范
+
+遵循 [Conventional Commits 1.0](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```
+<type>(<scope>): <subject>
+<空行>
+[<body, 解释 why 不是 what>]
+<空行>
+[<footer, e.g. BREAKING CHANGE / Refs #123>]
+```
+
+## type(必填)
+
+| type | 用途 |
+|---|---|
+| `feat` | 新功能(对应 MINOR 版本) |
+| `fix` | 修 bug(对应 PATCH 版本) |
+| `perf` | 性能优化(不改行为) |
+| `refactor` | 重构(不改行为也不改性能) |
+| `docs` | 仅文档 / 注释 |
+| `test` | 仅测试 / 评测脚本 |
+| `build` | 构建系统、依赖、`.gitignore`、`requirement.txt`、Dockerfile |
+| `ci` | CI 配置(github actions 等) |
+| `chore` | 杂项(scripts/、tools/、辅助代码) |
+| `revert` | 回滚某个 commit |
+
+**Breaking change**:type 后加 `!`(如 `feat(head)!: rewrite InstanceBank API`),并在 body 用 `BREAKING CHANGE: <说明>` footer。
+
+## scope(可选,但推荐)
+
+本仓库常用 scope:`head / backbone / decoder / instance_bank / dataset / sampler / loss / ops / scripts / docs / tools / config`
+
+## subject(必填)
+
+- < 50 字符,小写开头,**不加句号**
+- 用动词原形(`add` / `fix` / `replace` / `remove`),不用过去式
+- 描述"做了什么",不是"为什么"
+
+## body(可选,推荐)
+
+- 解释 **why** 和 **trade-off**,不重复 diff 已经看得到的内容
+- 行宽 ≤ 72 字符
+- 跟 subject 之间空一行
+
+## 示例
+
+```
+feat(head): add PF-Track Past/Future Reasoning module
+
+Insert a SpatialTemporalReasoner between InstanceBank.cache and the
+final decoder output. History (3 frames) refines current query via
+hist_temporal_transformer; future prediction (8 steps) is used to keep
+occluded tracks alive.
+
+Refs: docs/research/sparse4dv3_improvement_plan.md (B1)
+```
+
+```
+fix(ops): make deformable_aggregation import work in both develop/install modes
+
+torch 2.3 install mode places .so at site-packages/, not at ops/. Use
+`try: from . import ...; except: import ...` so the same code works in
+venv (develop) and image (install) layouts.
+```

@@ -1,0 +1,46 @@
+---
+description: Git branch naming & lifecycle (GitHub Flow + lqy/* personal prefix)
+alwaysApply: true
+---
+
+# 分支策略
+
+采用 **GitHub Flow**(主流推荐,见 [AWS Prescriptive Guidance](https://docs.aws.amazon.com/prescriptive-guidance/latest/choosing-git-branch-approach/git-branching-strategies.html)):
+
+- `main` 永远可部署,只允许 fast-forward 或 squash merge,**禁止直接 push**
+- 所有改动从 `main` 开 short-lived 分支,完成后开 PR 合回
+
+## 分支命名
+
+格式 `<owner>/<type>/<short-topic>`(本仓库已沿用 `lqy/*` 前缀习惯):
+
+| 类型 | 前缀 | 示例 |
+|---|---|---|
+| 功能 | `lqy/feature/*` | `lqy/feature/lidar-fusion` |
+| 实验/调研 | `lqy/exp/*` | `lqy/exp/dn-noise-scale-ablation` |
+| 修复 | `lqy/fix/*` | `lqy/fix/dataloader-deadlock` |
+| 重构 | `lqy/refactor/*` | `lqy/refactor/instance-bank` |
+| 文档 | `lqy/docs/*` | `lqy/docs/baseline-repro` |
+| 基础设施/脚本 | `lqy/chore/*` | `lqy/chore/setup-env-global` |
+| 当前 baseline 复现专用 | `lqy/baseline-repro` | 已存在 |
+
+规则:
+- 全小写,词间用 `-`,**禁止下划线 / 空格 / 中文**
+- topic 短(< 30 字符),描述"做什么"而不是"怎么做"
+- 一个分支只做一件事,**不超过 1-2 周**;超时拆分
+
+## 生命周期
+
+```bash
+git checkout main && git pull origin main          # 1. 同步主干
+git checkout -b lqy/feature/<topic>                # 2. 开新分支
+# ... 开发 + 多次 commit ...
+git push -u origin lqy/feature/<topic>             # 3. 推到远程
+# ... 在 GitHub 开 PR → review → merge ...
+git checkout main && git pull && git branch -d lqy/feature/<topic>  # 4. 清理本地分支
+```
+
+**禁止操作**:
+- `git push --force` 到 `main`(任何场景)
+- 在他人分支上 `git push --force`(需先沟通)
+- 提交 `*.pth / *.pkl / data/ / ckpt/ / .venv/ / work_dirs/`(`.gitignore` 已配)

@@ -1,0 +1,63 @@
+---
+description: Pull request, code review & merge policy
+alwaysApply: false
+globs: .github/**,**/*.md,**/CHANGELOG*
+---
+
+# Pull Request 规范
+
+## 何时开 PR
+
+- 任何要进入 `main` 的代码 / 文档 / 脚本改动 — **不允许直接 push main**
+- 实验性 / 阶段性进度可以开 **Draft PR**,边写边讨论
+
+## PR 标题
+
+与 commit message 同格式:`<type>(<scope>): <subject>`
+
+例:`feat(head): add contrastive tracking loss (B5)`
+
+## PR 描述模板
+
+```markdown
+## Summary
+<1-3 句话 why,引用 docs/research/* 里的方案编号>
+
+## Changes
+- ...(关键改动按模块列)
+
+## Verification
+- [ ] 单卡 eval 跑通,关键 metric:
+- [ ] 8 卡训练 sanity 跑过 N iter,loss 正常下降:
+- [ ] 自动化 lint 通过(如有)
+
+## Risk / Rollback
+<潜在影响 + 怎么 revert>
+
+## Related
+- Plan: docs/research/<file>.md#<section>
+- Refs: #<issue>(如有)
+```
+
+## Review 检查清单
+
+- [ ] **零 secret**:无 token / key / dataset path / 内部 URL
+- [ ] **零大文件**:无 `*.pth / *.pkl / *.npy / *.bin`(`.gitignore` 应已挡)
+- [ ] **可重现**:新增训练/评测必须有 scripts/ 入口 + 文档
+- [ ] **向后兼容** 或显式标 BREAKING CHANGE(commit + PR 标题都加 `!`)
+- [ ] **commit 历史干净**(必要时 squash,不要 50 个 "fix typo")
+
+## 合并策略
+
+| 场景 | 策略 |
+|---|---|
+| 单 commit 干净的 PR | **Rebase and merge** |
+| 多 commit 但每个都有意义 | **Rebase and merge** |
+| WIP-style 多 commit | **Squash and merge**,squash 后用 PR 标题作为 subject |
+| 跨分支同步(`main` → `lqy/*`) | `git rebase main` 而非 `git merge main`,保持线性 |
+
+**禁止 merge commit**(`Create a merge commit` 选项),`main` 历史必须线性。
+
+## 急救流程(生产 hot-fix)
+
+走标准 PR,不可绕过 review。即使紧急也至少口头知会 1 人后再 self-merge。
