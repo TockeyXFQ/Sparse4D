@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparse4Dv3 改进项目 — Handoff Document</title>
+<style>
+  /* ===== Typography (GitHub-flavored) ===== */
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", Helvetica, Arial, sans-serif, "Apple Color Emoji";
+    color: #24292f;
+    line-height: 1.6;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 48px 96px;
+    background: #fff;
+  }
+  h1, h2, h3, h4 { color: #1f2328; font-weight: 600; margin-top: 32px; }
+  h1 { font-size: 32px; border-bottom: 2px solid #d0d7de; padding-bottom: 12px; margin-top: 0; }
+  h2 { font-size: 24px; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; }
+  h3 { font-size: 19px; }
+  h4 { font-size: 16px; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ===== Code ===== */
+  code, pre { font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+  code { background: #eff1f3; padding: 2px 6px; border-radius: 4px; font-size: 0.88em; }
+  pre {
+    background: #f6f8fa;
+    padding: 12px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid #d0d7de;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .lang-bash::before {
+    content: "bash"; display: inline-block; background: #1f2328; color: #fff;
+    font-size: 11px; padding: 0 6px; border-radius: 3px; margin-bottom: 4px;
+  }
+
+  /* ===== Tables ===== */
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 12px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+
+  /* ===== Status pills ===== */
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px;
+          font-weight: 600; letter-spacing: 0.3px; }
+  .pill-done    { background: #1a7f37; color: #fff; }
+  .pill-doing   { background: #bf8700; color: #fff; }
+  .pill-todo    { background: #57606a; color: #fff; }
+  .pill-blocked { background: #cf222e; color: #fff; }
+  .pill-p0      { background: #cf222e; color: #fff; }
+  .pill-p1      { background: #d4a72c; color: #1f2328; }
+  .pill-p2      { background: #54aeff; color: #1f2328; }
+
+  /* ===== Callouts ===== */
+  .callout { border-left: 4px solid; padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .callout-info  { background: #ddf4ff; border-color: #0969da; }
+  .callout-warn  { background: #fff8c5; border-color: #bf8700; }
+  .callout-fatal { background: #ffebe9; border-color: #cf222e; }
+  .callout-ok    { background: #dafbe1; border-color: #1a7f37; }
+
+  /* ===== Nav (sticky TOC) ===== */
+  nav.toc {
+    position: sticky; top: 0; background: #f6f8fa; border: 1px solid #d0d7de;
+    padding: 10px 16px; border-radius: 6px; margin-bottom: 24px;
+    font-size: 13px;
+  }
+  nav.toc ol { margin: 4px 0 0 18px; padding: 0; }
+  nav.toc li { margin: 2px 0; }
+
+  /* ===== Misc ===== */
+  hr { border: 0; border-top: 1px solid #d0d7de; margin: 32px 0; }
+  .small { font-size: 12px; color: #57606a; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 320px; }
+  kbd { background: #eff1f3; border: 1px solid #c9cdd2; border-bottom-width: 2px;
+        padding: 0 6px; border-radius: 4px; font-family: inherit; font-size: 0.85em; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li::before { content: "☐  "; color: #57606a; }
+  ul.checklist li.done::before { content: "✅  "; }
+  ul.checklist li.doing::before { content: "🟡  "; }
+  ul.checklist li.blocked::before { content: "❌  "; }
+
+  /* ===== Metrics box ===== */
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
+  .metric { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px 16px; }
+  .metric .name { font-size: 12px; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric .value { font-size: 24px; font-weight: 600; color: #1f2328; margin-top: 2px; }
+  .metric .delta { font-size: 12px; color: #1a7f37; margin-top: 2px; }
+  .metric .delta-bad { color: #cf222e; }
+</style>
+</head>
+
+<body>
+
+<h1>Sparse4Dv3 改进项目 — Handoff Document</h1>
+<p class="small">
+  生成时间:2026-05-26 13:50 (UTC+8) ·
+  当前分支:<code>lqy/baseline-repro</code> ·
+  HEAD:<code>48169b5</code> ·
+  Remote:<a href="https://github.com/TockeyXFQ/Sparse4D">github.com/TockeyXFQ/Sparse4D</a>
+</p>
+
+<div class="callout callout-info">
+  <strong>这是什么文档?</strong> 切换数据集群前的完整状态快照,包含目前所有进度、命令、剩余 TODO 和踩坑记录。
+  新集群上 <code>git clone https://github.com/TockeyXFQ/Sparse4D</code> 并 <code>git checkout lqy/baseline-repro</code>
+  即可拿到这份文档(在 <code>docs/HANDOFF.html</code>),用浏览器打开即可。
+</div>
+
+<nav class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#status">1. 总体进度概览</a></li>
+    <li><a href="#env">2. 环境与镜像</a></li>
+    <li><a href="#commits">3. Git 当前 commit 历史</a></li>
+    <li><a href="#files">4. 关键文件清单</a></li>
+    <li><a href="#commands">5. 训练 / 评测命令(可直接复制)</a></li>
+    <li><a href="#phase0">6. Phase 0 剩余任务</a></li>
+    <li><a href="#phase1">7. Phase 1 改进计划(跟踪增强)</a></li>
+    <li><a href="#phase2">8. Phase 2 改进计划(多模态融合)</a></li>
+    <li><a href="#pitfalls">9. 历史踩坑速查(避免重复)</a></li>
+    <li><a href="#gitflow">10. Git 工作流规范</a></li>
+    <li><a href="#refs">11. 相关文档与参考</a></li>
+    <li><a href="#switch">12. 切换集群后的恢复 checklist</a></li>
+  </ol>
+</nav>
+
+<!-- =================== 1. STATUS =================== -->
+<h2 id="status">1. 总体进度概览</h2>
+
+<div class="row">
+  <div>
+    <h3>Phase 0:基线对齐</h3>
+    <ul class="checklist">
+      <li class="done">环境配置(系统全局 Python 3.11 + torch 2.3.1+cu121 + mmcv-full 1.7.0 + mmdet 2.28.2)</li>
+      <li class="done">数据准备(nuScenes 软链 + ckpt + pkl + k-means anchor)</li>
+      <li class="done">评测 pipeline 对齐(单卡用作者 ckpt,数字对齐论文 ±0.001)</li>
+      <li class="done">单卡 smoke training 验证(200 iter, loss 42→34,无 NaN)</li>
+      <li class="done">Git 仓库整理(6 个 commit + .cursor/rules/ 工作流规范)</li>
+      <li class="doing"><strong>8 卡 H20 真训练 baseline(待你在训练平台启动)</strong></li>
+      <li>评测自己训出的 baseline,确认 ±0.005 对齐论文</li>
+      <li>ablation config 模板(预留 Phase 1 所有 trick 的 flag)</li>
+    </ul>
+  </div>
+  <div>
+    <h3>对齐数字(单卡 H20 跑作者 ckpt)</h3>
+    <div class="metric-grid">
+      <div class="metric"><div class="name">mAP</div><div class="value">0.4652</div><div class="delta">+0.0005 vs paper 0.4647</div></div>
+      <div class="metric"><div class="name">NDS</div><div class="value">0.5642</div><div class="delta">+0.0006 vs paper 0.5636</div></div>
+      <div class="metric"><div class="name">AMOTA</div><div class="value">0.476</div><div class="delta delta-bad">−0.001 vs paper 0.477</div></div>
+      <div class="metric"><div class="name">AMOTP</div><div class="value">1.136</div><div class="delta">0.000 vs paper 1.136</div></div>
+      <div class="metric"><div class="name">IDS</div><div class="value">356</div><div class="delta">−85 vs paper 441</div></div>
+    </div>
+    <p class="small">论文官方数字来自 <code>projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py</code> 头部注释(R50, val split)。所有指标都在 ±0.001 容差内,镜像模式同步通过 import smoke check。</p>
+  </div>
+</div>
+
+<!-- =================== 2. ENV =================== -->
+<h2 id="env">2. 环境与镜像</h2>
+
+<h3>2.1 GPU / 系统</h3>
+<table>
+  <tr><th>项</th><th>值</th></tr>
+  <tr><td>GPU</td><td>NVIDIA H20 (Hopper, sm_90, 97 GB HBM)</td></tr>
+  <tr><td>开发机 GPU 数</td><td>1 张(只能 smoke,真训练上 8 卡集群)</td></tr>
+  <tr><td>系统 CUDA toolkit</td><td>12.1 (<code>/usr/local/cuda-12.1</code>)</td></tr>
+  <tr><td>系统 driver</td><td>570.133.20 (兼容 CUDA 12.x)</td></tr>
+  <tr><td>共享存储</td><td>CPFS @ <code>/mnt/volumes/ad-perception-al-sh02/...</code>(跨集群挂载)</td></tr>
+</table>
+
+<h3>2.2 Python 依赖(系统全局,镜像已就绪)</h3>
+<table>
+  <tr><th>包</th><th>版本</th><th>来源</th></tr>
+  <tr><td>Python</td><td>3.11.11</td><td><code>/usr/local/bin/python3.11</code></td></tr>
+  <tr><td>torch / torchvision / torchaudio</td><td>2.3.1+cu121 / 0.18.1 / 2.3.1</td><td>镜像自带</td></tr>
+  <tr><td>triton</td><td>2.3.1</td><td>镜像自带</td></tr>
+  <tr><td>mmcv-full</td><td>1.7.0 (内含 patch)</td><td>镜像自带</td></tr>
+  <tr><td>mmdet</td><td>2.28.2</td><td>镜像自带</td></tr>
+  <tr><td>mmengine-lite / mmsegmentation</td><td>0.10.7 / 0.30.0</td><td>镜像自带</td></tr>
+  <tr><td>numpy / pandas / scipy</td><td>1.26.4 / 2.3.1 / 1.12.0</td><td>镜像自带</td></tr>
+  <tr><td>nuscenes-devkit</td><td>1.1.9</td><td>镜像自带</td></tr>
+  <tr><td>motmetrics</td><td>1.1.3 + 2 处 patch</td><td>setup_env_global.sh 安装</td></tr>
+  <tr><td>scikit-learn</td><td>1.7.1</td><td>镜像自带</td></tr>
+  <tr><td><b>deformable_aggregation_ext</b></td><td>0.0.0 (自编译 .so,含 sm_90 PTX)</td><td>setup_env_global.sh 编译装到 site-packages</td></tr>
+  <tr><td>pyquaternion</td><td>0.9.9</td><td>镜像自带</td></tr>
+</table>
+
+<h3>2.3 已应用的兼容补丁(都已自动化)</h3>
+<p>4 个补丁全部由 <code>scripts/_apply_compat_patches.sh</code> 幂等应用,新集群跑 <code>scripts/00_setup_env_global.sh</code> 会自动调用:</p>
+<table>
+  <tr><th>#</th><th>文件</th><th>问题</th><th>修法</th></tr>
+  <tr><td>1</td><td><code>mmcv/parallel/distributed.py</code></td><td>torch 2.0+ DDP 没有 <code>_use_replicated_tensor_module</code> 属性</td><td>用 <code>getattr(..., False)</code> fallback 到 <code>self.module</code></td></tr>
+  <tr><td>2</td><td><code>mmcv/parallel/_functions.py</code></td><td>torch 2.x 的 <code>_get_stream</code> 需要 <code>torch.device</code> 不是 int</td><td>包装成 <code>torch.device('cuda', d)</code></td></tr>
+  <tr><td>3</td><td><code>motmetrics/metrics.py</code></td><td>Py3.10+ 移除 <code>collections.Iterable</code></td><td>改 <code>collections.abc.Iterable</code></td></tr>
+  <tr><td>4</td><td><code>motmetrics/metrics.py</code></td><td>Py3.11 移除 <code>inspect.getargspec</code></td><td>改 <code>inspect.getfullargspec</code></td></tr>
+</table>
+
+<h3>2.4 Sparse4D 源码层修复(已 commit 到 git,不用 patch)</h3>
+<table>
+  <tr><th>#</th><th>文件</th><th>修复内容</th><th>Commit</th></tr>
+  <tr><td>1</td><td><code>tools/test.py</code> + <code>tools/train.py</code></td><td>支持 <code>--local-rank</code>(torch 2.x launcher 把下划线改成中划线)</td><td><code>e059c6c</code></td></tr>
+  <tr><td>2</td><td><code>projects/__init__.py</code>(新增)</td><td>把 namespace package 升级成 regular package,避免被系统镜像里 Meta 库的 <code>projects/</code> 屏蔽</td><td><code>ed1c511</code></td></tr>
+  <tr><td>3</td><td><code>projects/mmdet3d_plugin/ops/deformable_aggregation.py</code></td><td><code>try: from . import ...; except: import ...</code> 同时兼容 develop 与 install 安装模式</td><td><code>ed1c511</code></td></tr>
+  <tr><td>4</td><td><code>projects/mmdet3d_plugin/datasets/nuscenes_3d_det_track_dataset.py:361</code></td><td><code>np.int</code> → <code>np.int64</code>(numpy 1.24+ 移除 alias)</td><td><code>4234179</code></td></tr>
+</table>
+
+<!-- =================== 3. COMMITS =================== -->
+<h2 id="commits">3. Git 当前 commit 历史</h2>
+
+<p>分支 <code>lqy/baseline-repro</code>,Remote <code>origin</code> = <code>https://github.com/TockeyXFQ/Sparse4D.git</code>。</p>
+
+<pre><code>48169b5  chore(scripts): add 1-GPU smoke-test training script (200 iter)
+4234179  fix(dataset): replace deprecated np.int with np.int64
+56fd45d  docs(rules): add cursor project rules for git workflow
+e059c6c  Accept --local-rank in tools/{test,train}.py for torch >= 2.x launcher
+ed1c511  Add global-python (image-friendly) env mode + compat patches
+9eb4317  Add baseline reproduction scripts + docs (Phase 0)
+─────────────────────────────────────
+249ffbb  Update README.md                            ← origin/main
+</code></pre>
+
+<div class="callout callout-warn">
+  <strong>注意 push 状态</strong>:截至此文档生成时,只有第一个 commit 范围(到 <code>e059c6c</code>)我们用 <code>git ls-remote</code> 验证过远程有。<strong>新集群上务必先 push 一次</strong>:
+  <pre><code class="lang-bash">git push origin lqy/baseline-repro</code></pre>
+</div>
+
+<!-- =================== 4. FILES =================== -->
+<h2 id="files">4. 关键文件清单</h2>
+
+<pre><code>Sparse4D-V3/
+├── .cursor/rules/                              ← Cursor 工作流规则(git 规范)
+│   ├── git-branching.mdc                       (alwaysApply=true)
+│   ├── git-commit-message.mdc                  (alwaysApply=true)
+│   └── git-pull-request.mdc                    (file-scoped)
+│
+├── projects/__init__.py                        ← 新增:namespace package fix
+├── projects/mmdet3d_plugin/
+│   ├── datasets/nuscenes_3d_det_track_dataset.py    (np.int → np.int64)
+│   └── ops/deformable_aggregation.py                (双模式 import)
+│
+├── scripts/                                    ← 全部新增
+│   ├── 00_setup_env.sh                         venv 模式 setup(开发机本地)
+│   ├── 00_setup_env_global.sh                  ★ 系统全局 setup(推荐,镜像友好)
+│   ├── _apply_compat_patches.sh                4 个 compat patch(幂等,可重跑)
+│   ├── 01_prepare_data.sh                      数据软链 + ckpt 下载 + pkl + k-means
+│   ├── 02_eval_pretrained.sh                   8 卡评测作者 ckpt
+│   ├── 02_eval_pretrained_1gpu.sh              1 卡评测(开发机用)
+│   ├── 03_train_baseline.sh                    ★ 8 卡训练 baseline(真训练)
+│   ├── 03_train_baseline_1gpu.sh               1 卡 smoke(200 iter)
+│   └── 04_eval_my_baseline.sh                  评测自己训出的 ckpt
+│
+├── tools/test.py + tools/train.py              (--local-rank fix)
+│
+├── docs/
+│   ├── baseline_repro.md                       Phase 0 详细使用说明
+│   ├── HANDOFF.html                            ← 本文档
+│   └── quick_start.md                          (原作者)
+│
+├── projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py    ← 主 config
+├── .gitignore                                  扩展过(venv/data/ckpt/build/work_dirs/...)
+│
+└── work_dirs/eval_pretrained_1gpu_20260525_195019/    ← 已验证的对齐数字
+    ├── eval.log
+    └── results/img_bbox/{metrics_summary.json, plots/...}
+</code></pre>
+
+<p class="small">外层 <code>../docs/research/sparse4dv3_improvement_plan.md</code>(在 Track/ 不在 Sparse4D-V3/)是完整的改进方案分析报告。新集群恢复时,如果 Track/docs/research/ 不在,可以从这份 HTML 的 Phase 1/2 章节里看到关键内容。</p>
+
+<!-- =================== 5. COMMANDS =================== -->
+<h2 id="commands">5. 训练 / 评测命令(可直接复制)</h2>
+
+<h3>5.1 8 卡平台:真训练 baseline <span class="pill pill-p0">P0</span></h3>
+<p>提交训练任务时,挂当前镜像(或保存的镜像)+ <code>/mnt/volumes/ad-perception-al-sh02/...</code> 数据卷,然后执行:</p>
+<pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3/scripts/03_train_baseline.sh</code></pre>
+<p><strong>选项含义</strong>:</p>
+<ul>
+  <li><code>USE_GLOBAL_PYTHON=1</code>:跳过 venv 查找,直接走系统 <code>/usr/local/bin/python3.11</code></li>
+  <li>脚本内部已 <code>export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7</code> + <code>dist_train.sh 8</code></li>
+  <li>config 默认 <code>num_gpus=8 × samples_per_gpu=6 = total_batch_size=48</code>,100 epoch,~12-18h</li>
+  <li>每 20 epoch 自动 eval + 存 ckpt,共 5 个 ckpt(在 <code>work_dirs/baseline_v3_r50_repro/</code>)</li>
+</ul>
+
+<h3>5.2 8 卡平台:评测自己训出的 baseline</h3>
+<pre><code class="lang-bash"># 默认评测 latest.pth
+USE_GLOBAL_PYTHON=1 bash /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3/scripts/04_eval_my_baseline.sh
+
+# 或指定某个 ckpt
+USE_GLOBAL_PYTHON=1 bash scripts/04_eval_my_baseline.sh work_dirs/baseline_v3_r50_repro/iter_58500.pth</code></pre>
+
+<h3>5.3 8 卡平台:用作者 ckpt 跑评测(sanity check 镜像)</h3>
+<pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3/scripts/02_eval_pretrained.sh</code></pre>
+
+<h3>5.4 开发机(1 卡):smoke test 训练</h3>
+<pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3/scripts/03_train_baseline_1gpu.sh</code></pre>
+<p>200 iter,~5-10 分钟,只验证 forward/backward/dataloader 跑通。<strong>不要</strong>用单卡跑完整 100 epoch(要 6.5 天且数字不对齐)。</p>
+
+<h3>5.5 开发机(1 卡):评测</h3>
+<pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3/scripts/02_eval_pretrained_1gpu.sh</code></pre>
+<p>单卡跑 6019 个 val sample,~14 分钟推理 + 30 分钟评测 = ~45 分钟。</p>
+
+<h3>5.6 训练监控</h3>
+<pre><code class="lang-bash"># 实时看 log
+tail -f work_dirs/baseline_v3_r50_repro/train.log
+
+# 看 GPU 占用
+watch -n 5 'nvidia-smi --query-gpu=index,utilization.gpu,memory.used,power.draw --format=csv'
+
+# 看 tensorboard
+tensorboard --logdir work_dirs/baseline_v3_r50_repro/tf_logs --port 6006 --bind_all</code></pre>
+
+<h3>5.7 新集群第一次重建环境</h3>
+<p>如果是个 <strong>全新</strong> 的镜像/集群(没有任何 mmcv/mmdet),按顺序跑:</p>
+<pre><code class="lang-bash">cd /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/Sparse4D-V3
+
+# 0. 装 motmetrics + 编译 CUDA op + apply 4 个 patch(系统全局)
+bash scripts/00_setup_env_global.sh
+
+# 1. 数据准备(软链 + ckpt + pkl + anchor),如果共享存储里 ckpt/pkl 还在可跳过
+bash scripts/01_prepare_data.sh
+
+# 2. 验证环境(用作者 ckpt 评测)
+USE_GLOBAL_PYTHON=1 bash scripts/02_eval_pretrained.sh   # 8 卡机
+# 或
+USE_GLOBAL_PYTHON=1 bash scripts/02_eval_pretrained_1gpu.sh   # 1 卡机</code></pre>
+
+<!-- =================== 6. PHASE 0 =================== -->
+<h2 id="phase0">6. Phase 0 剩余任务</h2>
+
+<table>
+  <tr><th>任务</th><th>状态</th><th>命令</th><th>时长</th></tr>
+  <tr>
+    <td><strong>8 卡训练 baseline</strong></td>
+    <td><span class="pill pill-doing">DOING</span></td>
+    <td><code>scripts/03_train_baseline.sh</code></td>
+    <td>12-18h</td>
+  </tr>
+  <tr>
+    <td>评测自己训出的 ckpt(确认 ±0.005 对齐论文)</td>
+    <td><span class="pill pill-todo">TODO</span></td>
+    <td><code>scripts/04_eval_my_baseline.sh</code></td>
+    <td>~30 min(8 卡)</td>
+  </tr>
+  <tr>
+    <td>准备 Phase 1 ablation flag 框架(在 config 里预留 5 个 trick 的 flag,默认 False)</td>
+    <td><span class="pill pill-todo">TODO</span></td>
+    <td>待写脚本</td>
+    <td>~半天</td>
+  </tr>
+</table>
+
+<div class="callout callout-warn">
+  <strong>Phase 0 验收标准</strong>:自己训出的 baseline 的指标须满足:<br>
+  &nbsp;&nbsp;&nbsp;<code>NDS ≥ 0.558 (vs 论文 0.5636)</code>,<code>AMOTA ≥ 0.470 (vs 0.477)</code>,<code>IDS ≤ 500</code>。<br>
+  在容差内才能进入 Phase 1。
+</div>
+
+<!-- =================== 7. PHASE 1 =================== -->
+<h2 id="phase1">7. Phase 1 改进计划(跟踪增强)</h2>
+
+<p>按 <a href="../../docs/research/sparse4dv3_improvement_plan.md">docs/research/sparse4dv3_improvement_plan.md</a> 的 ROI 排序,5 个 trick 推荐这个顺序接入(每加一个跑一次 8 卡训练验证 ablation):</p>
+
+<table>
+  <tr><th>顺序</th><th>编号</th><th>名称</th><th>来源论文</th><th>实现成本</th><th>预期收益</th></tr>
+  <tr>
+    <td>1.1</td>
+    <td>B5</td>
+    <td>ContrasTR loss</td>
+    <td><a href="https://arxiv.org/abs/2311.08043">ContrasTR (WACV 2024)</a></td>
+    <td>🟢 低(纯 loss 加法)</td>
+    <td>+1-3% AMOTA,IDS 降低</td>
+  </tr>
+  <tr>
+    <td>1.2</td>
+    <td>B1</td>
+    <td>PF-Track Spatial-Temporal Reasoner</td>
+    <td><a href="https://arxiv.org/abs/2302.03802">PF-Track (CVPR 2023)</a>(本地已有 <code>../PF-Track/</code>)</td>
+    <td>🟢 低(代码可复用)</td>
+    <td>+3-5% AMOTA,IDS 降 50%</td>
+  </tr>
+  <tr>
+    <td>1.3</td>
+    <td>B7</td>
+    <td>Birth/Death 状态机(替代 prev_id++ 暴力分配)</td>
+    <td><a href="https://arxiv.org/abs/2307.16675">Poly-MOT (IROS 2023)</a></td>
+    <td>🟢 极低</td>
+    <td>IDS 进一步降低</td>
+  </tr>
+  <tr>
+    <td>1.4</td>
+    <td>D1+D4</td>
+    <td>Hierarchical Query Denoising + 物理约束 DN noise</td>
+    <td><a href="https://arxiv.org/abs/2406.02147">S2-Track (ICML 2025)</a></td>
+    <td>🟢 低</td>
+    <td>+2-3% AMOTA</td>
+  </tr>
+  <tr>
+    <td>1.5</td>
+    <td>B3</td>
+    <td>Uncertainty-aware Probabilistic Decoder</td>
+    <td>S2-Track</td>
+    <td>🟡 中(改 attention)</td>
+    <td>+2-3% AMOTA</td>
+  </tr>
+</table>
+
+<h3>Phase 1 接入工作流</h3>
+<ol>
+  <li><strong>新建实验分支</strong>(规范见 §10):<code>git checkout -b lqy/exp/&lt;trick&gt; main</code></li>
+  <li><strong>从 baseline config 复制一份</strong>:<code>cp projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py projects/configs/expN_&lt;trick&gt;.py</code></li>
+  <li><strong>改 flag 启用 trick</strong>(在 Phase 0 末段准备好的 flag 框架里)</li>
+  <li><strong>8 卡训练</strong>:<code>CONFIG=projects/configs/expN_&lt;trick&gt;.py bash scripts/03_train_baseline.sh</code></li>
+  <li><strong>评测 + 与上一个 baseline 对比</strong></li>
+  <li><strong>结果 ≥ 论文 ablation 预期 → merge 回 main + 进下一个 trick</strong>;不达标 → debug 或 revert</li>
+</ol>
+
+<h3>Phase 1 预期最终指标</h3>
+<div class="metric-grid">
+  <div class="metric"><div class="name">NDS</div><div class="value">0.58+</div><div class="delta">+2% vs 0.5636 baseline</div></div>
+  <div class="metric"><div class="name">AMOTA</div><div class="value">0.60+</div><div class="delta">+12% vs 0.477 baseline</div></div>
+  <div class="metric"><div class="name">IDS</div><div class="value">&lt; 200</div><div class="delta">−54% vs 441 baseline</div></div>
+</div>
+
+<!-- =================== 8. PHASE 2 =================== -->
+<h2 id="phase2">8. Phase 2 改进计划(多模态融合)<span class="pill pill-p2" style="margin-left:8px;">P2</span></h2>
+
+<p>Phase 1 完成后,引入 LiDAR 提升上限:</p>
+
+<table>
+  <tr><th>组件</th><th>来源</th><th>实现要点</th></tr>
+  <tr>
+    <td>LiDAR backbone</td>
+    <td>VoxelNet (CenterPoint 同款) / PointPillars</td>
+    <td>BEV feature 输出,256 通道</td>
+  </tr>
+  <tr>
+    <td>跨模态 sampling</td>
+    <td><a href="https://arxiv.org/abs/2203.10642">FUTR3D MAFS (CVPRW 2023)</a></td>
+    <td>替换 DFA,query 同时从 image + BEV 采样 + 自适应加权</td>
+  </tr>
+  <tr>
+    <td>位置编码</td>
+    <td><a href="https://arxiv.org/abs/2301.01283">CMT (ICCV 2023)</a></td>
+    <td>image token 用 frustum 3D,LiDAR token 用 BEV;在 3D 空间对齐</td>
+  </tr>
+  <tr>
+    <td>Masked-modal training</td>
+    <td>CMT</td>
+    <td>训练时随机 drop modality,容错</td>
+  </tr>
+  <tr>
+    <td>显式深度监督(可选)</td>
+    <td><a href="https://arxiv.org/abs/2206.10092">BEVDepth (AAAI 2023)</a></td>
+    <td>替换 DenseDepthNet,用 LiDAR GT 监督</td>
+  </tr>
+</table>
+
+<p>预期:NDS 0.72+, mAP 0.65+, AMOTA 0.70+(对标 TransFusion-CL,但端到端跟踪)</p>
+
+<!-- =================== 9. PITFALLS =================== -->
+<h2 id="pitfalls">9. 历史踩坑速查(新集群避免重复)</h2>
+
+<table>
+  <tr><th>#</th><th>报错</th><th>根因</th><th>修法 / 状态</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code>The detected CUDA version (12.1) mismatches the version that was used to compile PyTorch (11.7)</code></td>
+    <td>用 torch 1.13+cu117 编 CUDA op 时,系统 nvcc 12.1 不兼容</td>
+    <td>必须用 cu121 的 torch wheel(torch 2.3.1+cu121 已在镜像里)</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><code>test.py: error: unrecognized arguments: --local-rank=0</code></td>
+    <td>torch 2.x launcher 把 <code>--local_rank</code> 改成 <code>--local-rank</code></td>
+    <td>commit <code>e059c6c</code> 已修(argparse 双别名)</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><code>'MMDistributedDataParallel' object has no attribute '_use_replicated_tensor_module'</code></td>
+    <td>mmcv 1.7 跟 torch 2.x DDP 实现脱节</td>
+    <td><code>_apply_compat_patches.sh</code> 已 patch(系统镜像 mmcv 1.7.0 已 patched)</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><code>AttributeError: 'int' object has no attribute 'type'</code> (in _get_stream)</td>
+    <td>torch 2.x 的 <code>_get_stream</code> 需要 <code>torch.device</code></td>
+    <td><code>_apply_compat_patches.sh</code> 已 patch</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><code>cannot import name 'Iterable' from 'collections'</code></td>
+    <td>motmetrics 1.1.3 用了 Py3.10+ 移除的 alias</td>
+    <td><code>_apply_compat_patches.sh</code> 已 patch</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><code>module 'inspect' has no attribute 'getargspec'</code></td>
+    <td>motmetrics 1.1.3 用了 Py3.11 移除的函数</td>
+    <td><code>_apply_compat_patches.sh</code> 已 patch</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td><code>ModuleNotFoundError: No module named 'projects.mmdet3d_plugin'</code>(系统 python)</td>
+    <td>系统镜像里某 Meta 库的 <code>projects/__init__.py</code> 屏蔽了 Sparse4D 的 namespace package</td>
+    <td>commit <code>ed1c511</code> 新增 Sparse4D 自己的 <code>projects/__init__.py</code></td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td><code>deformable_aggregation needs to be set up</code></td>
+    <td>CUDA op 没装,或 venv/系统的 torch 版本不同 .so ABI 不兼容</td>
+    <td><code>setup_env_global.sh</code> 自动 install 到 site-packages;源码 import 用 try/except 兼容两种位置</td>
+  </tr>
+  <tr>
+    <td>9</td>
+    <td><code>AttributeError: module 'numpy' has no attribute 'int'</code></td>
+    <td>Sparse4D 源码用了 deprecated <code>np.int</code>,numpy 1.24+ 已移除</td>
+    <td>commit <code>4234179</code> 改成 <code>np.int64</code></td>
+  </tr>
+  <tr>
+    <td>10</td>
+    <td><code>fatal: could not read Username for 'https://github.com'</code>(push 时)</td>
+    <td>HTTPS remote 需要 PAT,agent shell 无法交互输入</td>
+    <td>本地终端手动 push;或加 SSH key 到 GitHub 改 SSH remote</td>
+  </tr>
+</table>
+
+<!-- =================== 10. GIT WORKFLOW =================== -->
+<h2 id="gitflow">10. Git 工作流规范</h2>
+
+<p>完整规则在 <code>.cursor/rules/</code> 三个 mdc 文件里(Cursor 加载后自动应用)。要点摘录:</p>
+
+<h3>10.1 分支命名(GitHub Flow 简化版)</h3>
+<table>
+  <tr><th>类型</th><th>格式</th><th>示例</th></tr>
+  <tr><td>功能</td><td><code>lqy/feature/*</code></td><td><code>lqy/feature/lidar-fusion</code></td></tr>
+  <tr><td>实验/调研</td><td><code>lqy/exp/*</code></td><td><code>lqy/exp/contrastr-loss-weight</code></td></tr>
+  <tr><td>修复</td><td><code>lqy/fix/*</code></td><td><code>lqy/fix/dataloader-deadlock</code></td></tr>
+  <tr><td>重构</td><td><code>lqy/refactor/*</code></td><td><code>lqy/refactor/instance-bank</code></td></tr>
+  <tr><td>文档</td><td><code>lqy/docs/*</code></td><td><code>lqy/docs/handoff</code></td></tr>
+  <tr><td>基础设施/脚本</td><td><code>lqy/chore/*</code></td><td><code>lqy/chore/setup-env-global</code></td></tr>
+</table>
+
+<h3>10.2 Commit message(Conventional Commits 1.0)</h3>
+<pre><code>&lt;type&gt;(&lt;scope&gt;): &lt;subject&gt;
+
+[body, 解释 why]
+
+[footer, e.g. BREAKING CHANGE / Refs #123]</code></pre>
+
+<p>常用 type:<code>feat</code>(新功能) / <code>fix</code>(修 bug) / <code>perf</code>(性能) / <code>refactor</code> / <code>docs</code> / <code>test</code> / <code>build</code> / <code>ci</code> / <code>chore</code> / <code>revert</code></p>
+<p>本仓库 scope 词汇:<code>head / backbone / decoder / instance_bank / dataset / sampler / loss / ops / scripts / docs / tools / config</code></p>
+
+<h3>10.3 禁止操作</h3>
+<ul>
+  <li>❌ 直接 push <code>main</code></li>
+  <li>❌ <code>git push --force</code> 到 <code>main</code></li>
+  <li>❌ 提交 <code>*.pth / *.pkl / *.npy / data/ / ckpt/ / .venv/ / work_dirs/</code>(.gitignore 已配)</li>
+</ul>
+
+<!-- =================== 11. REFS =================== -->
+<h2 id="refs">11. 相关文档与参考</h2>
+
+<h3>11.1 项目内文档</h3>
+<ul>
+  <li><code>docs/baseline_repro.md</code> — Phase 0 详细使用说明(每条命令含选项解释)</li>
+  <li><code>.cursor/rules/{git-branching, git-commit-message, git-pull-request}.mdc</code> — Git 工作流规范</li>
+  <li><code>../docs/research/sparse4dv3_improvement_plan.md</code> — 改进方案分析报告(Sparse4Dv3 缺点 + 14 个改进模块 + 4 个组合方案)</li>
+  <li><code>../docs/analysis/network_architecture/sparse4dv3_temporal_r50_1x8_bs6_256x704.md</code> — Sparse4Dv3 网络架构逐层解析</li>
+</ul>
+
+<h3>11.2 关键 paper(Phase 1/2 改进所引用)</h3>
+<table>
+  <tr><th>缩写</th><th>论文</th><th>用于</th></tr>
+  <tr><td>Sparse4Dv3</td><td><a href="https://arxiv.org/abs/2311.11722">arXiv:2311.11722</a></td><td>baseline</td></tr>
+  <tr><td>PF-Track</td><td><a href="https://arxiv.org/abs/2302.03802">arXiv:2302.03802</a></td><td>Phase 1 B1 — Past/Future Reasoning</td></tr>
+  <tr><td>ADA-Track</td><td><a href="https://arxiv.org/abs/2405.08909">arXiv:2405.08909</a></td><td>Phase 1 B2 — 解耦 query + 关联</td></tr>
+  <tr><td>S2-Track</td><td><a href="https://arxiv.org/abs/2406.02147">arXiv:2406.02147</a></td><td>Phase 1 B3 (UPD) + C1 (PQI) + D1 (HQD)</td></tr>
+  <tr><td>ContrasTR</td><td><a href="https://arxiv.org/abs/2311.08043">arXiv:2311.08043</a></td><td>Phase 1 B5 — Contrastive loss</td></tr>
+  <tr><td>SambaMOTR</td><td><a href="https://arxiv.org/abs/2410.01806">arXiv:2410.01806</a></td><td>Phase 3 — Mamba long-term memory</td></tr>
+  <tr><td>CMT</td><td><a href="https://arxiv.org/abs/2301.01283">arXiv:2301.01283</a></td><td>Phase 2 A1 — 跨模态 token 对齐</td></tr>
+  <tr><td>FUTR3D</td><td><a href="https://arxiv.org/abs/2203.10642">arXiv:2203.10642</a></td><td>Phase 2 A2 — MAFS</td></tr>
+  <tr><td>BEVFusion</td><td><a href="https://arxiv.org/abs/2205.13542">arXiv:2205.13542</a></td><td>Phase 2 A3 — BEV 融合</td></tr>
+  <tr><td>BEVDepth</td><td><a href="https://arxiv.org/abs/2206.10092">arXiv:2206.10092</a></td><td>Phase 2 C2 — 显式深度监督</td></tr>
+</table>
+
+<h3>11.3 工程规范权威来源</h3>
+<ul>
+  <li><a href="https://www.conventionalcommits.org/en/v1.0.0/">Conventional Commits 1.0</a></li>
+  <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/choosing-git-branch-approach/git-branching-strategies.html">AWS Prescriptive Guidance — Git Branching Strategies</a></li>
+  <li><a href="https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow">Atlassian — Comparing Workflows</a></li>
+</ul>
+
+<!-- =================== 12. SWITCH CHECKLIST =================== -->
+<h2 id="switch">12. 切换集群后的恢复 checklist</h2>
+
+<ol>
+  <li><strong>验证共享存储能访问</strong>:<code>ls /mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/</code> 能列出 <code>Sparse4D-V3 / PF-Track / docs / ...</code> 等
+    <ul>
+      <li>如果挂载路径不一样:把所有脚本里的 <code>/mnt/volumes/ad-perception-al-sh02/liuqingyu854/Track/</code> 全局替换成新路径</li>
+      <li>nuScenes 数据卷如果路径变了:改 <code>scripts/01_prepare_data.sh</code> 顶部的 <code>NUSCENES_DIR=</code></li>
+    </ul>
+  </li>
+  <li><strong>验证 git 状态</strong>:
+    <pre><code class="lang-bash">cd Sparse4D-V3
+git fetch origin
+git checkout lqy/baseline-repro
+git log --oneline -10           # 至少要看到 48169b5 ... 9eb4317 这 6 个 commit</code></pre>
+    <p>如果 commit 不全:<code>git pull origin lqy/baseline-repro</code></p>
+  </li>
+  <li><strong>验证环境(用作者 ckpt 跑 detection eval ~ 5 min)</strong>:
+    <pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash scripts/02_eval_pretrained_1gpu.sh   # 1 卡机
+# 或
+USE_GLOBAL_PYTHON=1 bash scripts/02_eval_pretrained.sh        # 8 卡机</code></pre>
+    <p>数字应回到:<code>mAP 0.4652 / NDS 0.5642 / AMOTA 0.476</code> 附近(±0.001)</p>
+    <p><strong>如果新镜像里没有 motmetrics / CUDA op</strong>:先跑 <code>bash scripts/00_setup_env_global.sh</code> 安装 + apply patches</p>
+  </li>
+  <li><strong>启动训练</strong>:
+    <pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash scripts/03_train_baseline.sh   # 8 卡,12-18h</code></pre>
+  </li>
+  <li><strong>训完评测</strong>:
+    <pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 bash scripts/04_eval_my_baseline.sh</code></pre>
+  </li>
+</ol>
+
+<div class="callout callout-ok">
+  <strong>恢复就这么简单</strong>:只要共享存储和 GitHub 都能访问,5 步内 100% 恢复到当前状态。所有踩过的坑都已经在源码 / 脚本里固化,新集群不会重复踩。
+</div>
+
+<hr>
+
+<p class="small" style="text-align: center;">
+  Generated 2026-05-26 ·
+  Author: lqy (suizhen524@hellobike.com via shared dev box) ·
+  Repo: <a href="https://github.com/TockeyXFQ/Sparse4D">github.com/TockeyXFQ/Sparse4D</a> @ <code>lqy/baseline-repro</code>
+</p>
+
+</body>
+</html>
