@@ -1,14 +1,20 @@
-"""nuscenes-devkit / motmetrics 与 pandas 2.x 的兼容性补丁。
+"""nuscenes-devkit 与 pandas 2.x / numpy 1.x 的兼容性补丁集合。
 
-nuscenes-devkit v1.1.x 的 `nuscenes/eval/tracking/mot.py:MOTAccumulatorCustom.merge_event_dataframes`
-仍在使用 pandas 1.x 的 `DataFrame.append` —— 该 API 在 pandas 1.4 被废弃,
-在 pandas 2.0 已被彻底移除,改为推荐使用 `pd.concat`。
+容器内 pandas==2.3.1, numpy==1.26.4。nuscenes-devkit v1.1.x 的 tracking 评估代码
+有两处不兼容,会让训练在第一次 tracking eval(20 epoch)时打挂分布式 job。本模块通过
+monkey-patch 修复,导入 `projects.mmdet3d_plugin` 时自动生效。
 
-容器内 pandas==2.3.1,所以 tracking 评估会在 20 epoch 第一次评估时直接抛
-`AttributeError: 'DataFrame' object has no attribute 'append'`,导致整个分布式训练 job 退出。
+Patch 1: pandas 2.x 兼容
+    `nuscenes/eval/tracking/mot.py:MOTAccumulatorCustom.merge_event_dataframes` 使用了
+    pandas 1.x 的 `DataFrame.append`(2.0 已移除),替换为 `pd.concat`。
 
-本模块通过 monkey-patch 替换该方法,使 tracking 评估在 pandas>=2.0 环境下也能正常运行。
-导入 `projects.mmdet3d_plugin` 时自动生效。
+Patch 2: numpy 1.x 的 np.unique 对 NaN 的处理
+    `nuscenes/eval/tracking/algo.py:161` 有这样一个 assert:
+        assert unachieved + duplicate + len(thresh_metrics) == num_thresholds
+    其中 `duplicate = len(thresholds) - len(np.unique(thresholds))`。
+    numpy 1.x 的 `np.unique` 会把所有 NaN 合并成 1 个,但 numpy 2.0+ 保留全部。
+    nuscenes-devkit 的逻辑假定了 numpy 2.0 行为,所以在 numpy 1.x 下只要 thresholds 含 NaN
+    必然 assert 失败。我们在 `algo` 模块内把 `np.unique` 替换成保留所有 NaN 的版本。
 """
 
 from __future__ import annotations
@@ -101,4 +107,59 @@ def _apply_nuscenes_tracking_pandas2_patch() -> None:
     )
 
 
+def _unique_numpy2_style(ar, *args, **kwargs):
+    """np.unique 的 numpy>=2.0 兼容版本:对浮点数组保留全部 NaN(而非合并为 1 个)。
+
+    `args/kwargs` 全部转发给原 `np.unique`。仅当数组中含 NaN 时走我们的回退路径,
+    其他情况完全等价于上游 numpy 实现。
+    """
+    arr = np.asarray(ar)
+    if arr.dtype.kind != "f" or not np.any(np.isnan(arr)):
+        return _orig_np_unique(ar, *args, **kwargs)
+
+    nan_count = int(np.sum(np.isnan(arr)))
+    non_nan = arr[~np.isnan(arr)]
+    unique_non_nan = _orig_np_unique(non_nan, *args, **kwargs)
+    return np.concatenate([np.asarray(unique_non_nan), np.full(nan_count, np.nan)])
+
+
+_orig_np_unique = np.unique
+
+
+class _NumpyUniqueShim:
+    """一个仅重写 `unique` 的 numpy 代理,其余属性透传到真 numpy 模块。
+
+    用法:`module.np = _NumpyUniqueShim(np)` 之后,该模块内的 `np.unique` 走我们的实现,
+    `np.<其他>` 仍是上游 numpy。"""
+
+    __slots__ = ("_np",)
+
+    def __init__(self, np_module):
+        object.__setattr__(self, "_np", np_module)
+
+    def __getattr__(self, name):
+        if name == "unique":
+            return _unique_numpy2_style
+        return getattr(self._np, name)
+
+
+def _apply_nuscenes_tracking_nan_unique_patch() -> None:
+    try:
+        from nuscenes.eval.tracking import algo as _algo_mod
+    except ImportError:
+        logger.debug("nuscenes-devkit not installed; skip tracking algo patch.")
+        return
+
+    if getattr(_algo_mod, "_sparse4d_nan_unique_patched", False):
+        return
+
+    _algo_mod.np = _NumpyUniqueShim(np)
+    _algo_mod._sparse4d_nan_unique_patched = True
+    logger.info(
+        "Patched nuscenes.eval.tracking.algo: np.unique now retains all NaN values "
+        "(numpy>=2.0 behavior), fixing the assert at tracking/algo.py:161 under numpy<2.0."
+    )
+
+
 _apply_nuscenes_tracking_pandas2_patch()
+_apply_nuscenes_tracking_nan_unique_patch()
