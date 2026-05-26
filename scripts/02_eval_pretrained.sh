@@ -12,8 +12,25 @@ set -euo pipefail
 SPARSE4D_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)
 cd "${SPARSE4D_ROOT}"
 
-# shellcheck disable=SC1091
-source "${SPARSE4D_ROOT}/.venv/bin/activate"
+# ----- Python 环境选择 (3 种模式,优先级从高到低) -----
+# 1. USE_GLOBAL_PYTHON=1  → 系统 /usr/local/bin/python3.11(镜像模式,推荐)
+# 2. SPARSE4D_VENV=<path> → 指定 venv 路径(默认 /opt/sparse4d_env,镜像友好)
+# 3. ${SPARSE4D_ROOT}/.venv → fallback 到开发机本地 venv
+if [ "${USE_GLOBAL_PYTHON:-0}" = "1" ]; then
+    export PATH=/usr/local/bin:${PATH:-}
+    echo ">>> Using system python: $(which python3)"
+else
+    SPARSE4D_VENV=${SPARSE4D_VENV:-/opt/sparse4d_env}
+    [ -d "${SPARSE4D_VENV}" ] || SPARSE4D_VENV="${SPARSE4D_ROOT}/.venv"
+    if [ -d "${SPARSE4D_VENV}" ]; then
+        # shellcheck disable=SC1091
+        source "${SPARSE4D_VENV}/bin/activate"
+        echo ">>> Using venv: ${SPARSE4D_VENV}"
+    else
+        export PATH=/usr/local/bin:${PATH:-}
+        echo "[WARN] No venv at ${SPARSE4D_VENV}, falling back to system python: $(which python3)"
+    fi
+fi
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export PYTHONPATH=${PWD}:${PYTHONPATH:-}

@@ -1,8 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# 评测自己训出的 baseline ckpt(detection + tracking 双指标)
-# 用法: bash scripts/04_eval_my_baseline.sh [ckpt_path]
-# 默认 ckpt: work_dirs/baseline_v3_r50_repro/latest.pth
+# 单卡版: 用作者放出的 Sparse4Dv3 R50 ckpt 跑 detection + tracking 双评测
+# 目的: 对齐评测 pipeline,在只有 1 张 H20 的开发机上验证整套流程
+# 期望时间: ~3-4 小时 (单卡 H20, 6019 个 val sample,~2-3s/sample)
+# 期望指标 (config 注释里官方数字, val split):
+#     NDS    0.5636    mAP    0.4647
+#     AMOTA  0.477     AMOTP  1.136     IDS    441
 # =============================================================================
 set -euo pipefail
 
@@ -29,21 +32,20 @@ else
     fi
 fi
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0
 export PYTHONPATH=${PWD}:${PYTHONPATH:-}
 export PORT=29513
 
+# 不直接调 tools/test.py 走 MMDataParallel,因为 mmcv 1.7.2 的 MMDataParallel 在
+# torch 2.1 上有已知兼容 bug(_get_stream 把 device id int 当成 torch.device 传)。
+# 改用 dist_test.sh 单卡分布式模式(走 MMDistributedDataParallel,兼容)。
+
 CONFIG=projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py
-CKPT=${1:-work_dirs/baseline_v3_r50_repro/latest.pth}
-WORK_DIR=work_dirs/eval_my_baseline_$(date +%Y%m%d_%H%M%S)
+CKPT=ckpt/sparse4dv3_r50.pth
+WORK_DIR=work_dirs/eval_pretrained_1gpu_$(date +%Y%m%d_%H%M%S)
 mkdir -p "${WORK_DIR}"
 
-if [ ! -f "${CKPT}" ]; then
-    echo "[FAIL] checkpoint not found: ${CKPT}"
-    exit 1
-fi
-
-echo ">>> Eval my trained baseline with 8 GPUs"
+echo ">>> Eval pretrained Sparse4Dv3 R50 with 1 GPU (single-process DDP)"
 echo "    config = ${CONFIG}"
 echo "    ckpt   = ${CKPT}"
 echo "    output = ${WORK_DIR}"
@@ -51,7 +53,8 @@ echo "    output = ${WORK_DIR}"
 bash tools/dist_test.sh \
     "${CONFIG}" \
     "${CKPT}" \
-    8 \
+    1 \
+    --out "${WORK_DIR}/outputs.pkl" \
     --eval bbox \
     --eval-options jsonfile_prefix="${WORK_DIR}/results" \
     2>&1 | tee "${WORK_DIR}/eval.log"

@@ -1,7 +1,13 @@
 import torch
 from torch.autograd.function import Function, once_differentiable
 
-from . import deformable_aggregation_ext
+# .so 有两种安装位置(都正确,取决于安装模式):
+#   1) develop 模式 → 在本目录 ops/(相对 import)
+#   2) install 模式 → 在 site-packages/(顶层 import,镜像迁移友好)
+try:
+    from . import deformable_aggregation_ext
+except ImportError:
+    import deformable_aggregation_ext
 
 
 class DeformableAggregationFunction(Function):
