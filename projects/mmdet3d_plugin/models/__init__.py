@@ -7,6 +7,7 @@ from .blocks import (
 )
 from .instance_bank import InstanceBank
 from .memory_bank import MemoryBank
+from .pftrack_bank import PFTrackInstanceBank
 from .refine_2d import SparseBox2DRefinement
 from .detection3d import (
     SparseBox3DDecoder,
@@ -25,6 +26,7 @@ __all__ = [
     "AsymmetricFFN",
     "InstanceBank",
     "MemoryBank",
+    "PFTrackInstanceBank",
     "SparseBox2DRefinement",
     "SparseBox3DDecoder",
     "SparseBox3DTarget",
