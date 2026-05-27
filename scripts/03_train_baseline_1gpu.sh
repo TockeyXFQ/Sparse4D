@@ -34,8 +34,10 @@ export PYTHONPATH=${PWD}:${PYTHONPATH:-}
 export PORT=28652
 export OMP_NUM_THREADS=8
 
-CONFIG=projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py
-WORK_DIR=work_dirs/baseline_v3_r50_1gpu_smoke_$(date +%Y%m%d_%H%M%S)
+CONFIG=${CONFIG:-projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py}
+# WORK_DIR 默认含 config 文件名简称,方便识别 smoke 跑的是哪个 ablation
+_CFG_TAG=$(basename "${CONFIG}" .py)
+WORK_DIR=${WORK_DIR:-work_dirs/${_CFG_TAG}_1gpu_smoke_$(date +%Y%m%d_%H%M%S)}
 mkdir -p "${WORK_DIR}"
 
 # smoke-test 的 cfg 覆盖:
@@ -43,7 +45,8 @@ mkdir -p "${WORK_DIR}"
 # - evaluation.interval=百万    不触发 val eval(快)
 # - checkpoint_config.interval=百万   不存中间 ckpt(快)
 # - data.workers_per_gpu=4     1 卡时 worker 不需要太多
-echo ">>> Smoke-test training Sparse4Dv3 R50 on 1 GPU (200 iter)"
+SMOKE_ITERS=${SMOKE_ITERS:-200}
+echo ">>> Smoke-test training Sparse4Dv3 on 1 GPU (${SMOKE_ITERS} iter)"
 echo "    config   = ${CONFIG}"
 echo "    work dir = ${WORK_DIR}"
 
@@ -52,7 +55,7 @@ bash tools/dist_train.sh \
     1 \
     --work-dir "${WORK_DIR}" \
     --cfg-options \
-        runner.max_iters=200 \
+        runner.max_iters=${SMOKE_ITERS} \
         evaluation.interval=1000000 \
         checkpoint_config.interval=1000000 \
         data.workers_per_gpu=4 \
