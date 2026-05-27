@@ -12,11 +12,28 @@
 set -euo pipefail
 
 SPARSE4D_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)
-NUSCENES_DIR=/mnt/datasets/nuscenes/v1.0.0
+NUSCENES_DIR=${NUSCENES_DIR:-/mnt/datasets/nuscenes/v1.0.0}
 cd "${SPARSE4D_ROOT}"
 
-# shellcheck disable=SC1091
-source "${SPARSE4D_ROOT}/.venv/bin/activate"
+# ----- Python 环境选择 (3 种模式,优先级从高到低,与 02/03/04_*.sh 一致) -----
+# 1. USE_GLOBAL_PYTHON=1  → 系统 /usr/local/bin/python3.11(镜像模式,推荐)
+# 2. SPARSE4D_VENV=<path> → 指定 venv 路径(默认 /opt/sparse4d_env)
+# 3. ${SPARSE4D_ROOT}/.venv → fallback 到开发机本地 venv
+if [ "${USE_GLOBAL_PYTHON:-0}" = "1" ]; then
+    export PATH=/usr/local/bin:${PATH:-}
+    echo ">>> Using system python: $(which python3)"
+else
+    SPARSE4D_VENV=${SPARSE4D_VENV:-/opt/sparse4d_env}
+    [ -d "${SPARSE4D_VENV}" ] || SPARSE4D_VENV="${SPARSE4D_ROOT}/.venv"
+    if [ -d "${SPARSE4D_VENV}" ]; then
+        # shellcheck disable=SC1091
+        source "${SPARSE4D_VENV}/bin/activate"
+        echo ">>> Using venv: ${SPARSE4D_VENV}"
+    else
+        export PATH=/usr/local/bin:${PATH:-}
+        echo "[WARN] No venv at ${SPARSE4D_VENV}, falling back to system python: $(which python3)"
+    fi
+fi
 
 # --------------------------------------------------------------------------- #
 # 1. 创建 data/nuscenes 软链接
@@ -41,11 +58,18 @@ echo "[OK] nuScenes data root layout verified"
 # --------------------------------------------------------------------------- #
 # 2. 下载 ResNet50 ImageNet 预训练权重
 # --------------------------------------------------------------------------- #
+# 优先使用 HuggingFace timm/resnet50.tv_in1k(同源 torchvision IMAGENET1K_V1),
+# 在国内集群 download.pytorch.org 通常被屏蔽时仍可下到。两份权重 byte-equivalent,
+# state_dict 的 key 命名也与 torchvision 完全一致。
 mkdir -p ckpt
 if [ ! -f ckpt/resnet50-19c8e357.pth ]; then
-    wget --no-check-certificate \
-        https://download.pytorch.org/models/resnet50-19c8e357.pth \
-        -O ckpt/resnet50-19c8e357.pth
+    R50_URL_PRIMARY=https://huggingface.co/timm/resnet50.tv_in1k/resolve/main/pytorch_model.bin
+    R50_URL_FALLBACK=https://download.pytorch.org/models/resnet50-19c8e357.pth
+    if curl -sIL --max-time 8 "${R50_URL_PRIMARY}" | head -1 | grep -q "200"; then
+        wget --no-check-certificate "${R50_URL_PRIMARY}" -O ckpt/resnet50-19c8e357.pth
+    else
+        wget --no-check-certificate "${R50_URL_FALLBACK}" -O ckpt/resnet50-19c8e357.pth
+    fi
 fi
 echo "[OK] ckpt/resnet50-19c8e357.pth ($(du -h ckpt/resnet50-19c8e357.pth | cut -f1))"
 
