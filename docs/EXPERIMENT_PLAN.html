@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparse4Dv3 改进项目 — 实验设计文档</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", Helvetica, Arial, sans-serif;
+    color: #24292f; line-height: 1.6;
+    max-width: 1180px; margin: 0 auto;
+    padding: 32px 48px 96px; background: #fff;
+  }
+  h1, h2, h3, h4 { color: #1f2328; font-weight: 600; margin-top: 32px; }
+  h1 { font-size: 32px; border-bottom: 2px solid #d0d7de; padding-bottom: 12px; margin-top: 0; }
+  h2 { font-size: 24px; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; }
+  h3 { font-size: 19px; }
+  h4 { font-size: 16px; margin-top: 20px; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+  code { background: #eff1f3; padding: 2px 6px; border-radius: 4px; font-size: 0.88em; }
+  pre {
+    background: #f6f8fa; padding: 12px 16px; border-radius: 6px;
+    overflow-x: auto; border: 1px solid #d0d7de; font-size: 13px; line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 12px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px;
+          font-weight: 600; letter-spacing: 0.3px; }
+  .pill-p0 { background: #cf222e; color: #fff; }
+  .pill-p1 { background: #d4a72c; color: #1f2328; }
+  .pill-p2 { background: #54aeff; color: #1f2328; }
+  .pill-low { background: #1a7f37; color: #fff; }
+  .pill-mid { background: #bf8700; color: #fff; }
+  .pill-high { background: #57606a; color: #fff; }
+  .callout { border-left: 4px solid; padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .callout-info  { background: #ddf4ff; border-color: #0969da; }
+  .callout-warn  { background: #fff8c5; border-color: #bf8700; }
+  .callout-fatal { background: #ffebe9; border-color: #cf222e; }
+  .callout-ok    { background: #dafbe1; border-color: #1a7f37; }
+  nav.toc {
+    position: sticky; top: 0; background: #f6f8fa; border: 1px solid #d0d7de;
+    padding: 10px 16px; border-radius: 6px; margin-bottom: 24px; font-size: 13px;
+    z-index: 100;
+  }
+  nav.toc ol { margin: 4px 0 0 18px; padding: 0; }
+  nav.toc li { margin: 2px 0; }
+  hr { border: 0; border-top: 1px solid #d0d7de; margin: 32px 0; }
+  .small { font-size: 12px; color: #57606a; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 320px; }
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0; }
+  .metric { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px 16px; }
+  .metric .name { font-size: 12px; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric .value { font-size: 22px; font-weight: 600; color: #1f2328; margin-top: 2px; }
+  .metric .delta { font-size: 12px; color: #1a7f37; margin-top: 2px; }
+  .metric .delta-bad { color: #cf222e; }
+  .trick-card {
+    border: 1px solid #d0d7de; border-radius: 8px; padding: 16px 20px;
+    margin: 18px 0; background: #fbfcfd;
+  }
+  .trick-card h4 { margin-top: 0; padding-bottom: 6px; border-bottom: 1px solid #eaeef2; }
+  .trick-card .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #57606a; margin-bottom: 10px; }
+  .trick-card .meta span { background: #eff1f3; padding: 2px 8px; border-radius: 10px; }
+  .why { background: #fff8e1; border-left: 3px solid #d4a72c; padding: 8px 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+  .why strong { color: #8a6a00; }
+</style>
+</head>
+<body>
+<h1>Sparse4Dv3 改进项目 — 实验设计文档</h1>
+<p class="small">
+  生成时间:2026-05-26 17:20 (UTC+8) ·
+  当前分支:<code>lqy/baseline-repro</code> ·
+  Baseline 状态:<code>已对齐 (mAP 0.4652 / NDS 0.5642 / AMOTA 0.476, val 1-GPU)</code> ·
+  作者:lqy
+</p>
+
+<div class="callout callout-info">
+  <strong>这份文档是什么?</strong> Phase 0 baseline 对齐已完成,本文档规划之后所有消融实验 + 论文创新点。
+  每个 trick 都说明:<b>① 机制(怎么改的)</b>;<b>② 为什么有效(物理/工程层面的根因)</b>;<b>③ 预期收益 / 风险 / 成本</b>。
+  <b>请审阅,确认后我才开始写代码。</b>
+</div>
+
+<nav class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#overview">1. 总览与路线图</a></li>
+    <li><a href="#why">2. 为什么先做 Phase 1(再次澄清,不再 mention SOTA 0.667)</a></li>
+    <li><a href="#phase1">3. Phase 1: Camera-only baseline 增强(7 个 trick)</a></li>
+    <li><a href="#phase1-loo">4. Phase 1 leave-one-out ablation</a></li>
+    <li><a href="#phase2">5. Phase 2: Camera + LiDAR 融合(论文核心创新)</a></li>
+    <li><a href="#phase2-loo">6. Phase 2 leave-one-out ablation</a></li>
+    <li><a href="#robustness">7. Modality 鲁棒性评测(几乎免费)</a></li>
+    <li><a href="#phase3">8. Phase 3: V2-99 backbone + test set 冲分</a></li>
+    <li><a href="#story">9. 论文 story line(对标 DualViewDistill 0.669)</a></li>
+    <li><a href="#infra">10. 工程基础设施(共用)</a></li>
+    <li><a href="#timeline">11. 资源估算 & 时间表</a></li>
+    <li><a href="#risk">12. 风险点 / 决策点(等你拍板)</a></li>
+    <li><a href="#paper-table">13. 论文 ablation table 模板</a></li>
+  </ol>
+</nav>
+
+<!-- =================== 1. OVERVIEW =================== -->
+<h2 id="overview">1. 总览与路线图</h2>
+
+<div class="row">
+  <div>
+    <h3>整体目标</h3>
+    <ul>
+      <li><b>科研目标</b>:发表一篇 nuScenes tracking 顶会论文(对标 DualViewDistill 2025-06-05 那条 leaderboard)</li>
+      <li><b>工程目标</b>:形成一个可扩展、可维护的 Sparse4D 改进 codebase,支持 camera-only / camera+LiDAR / camera+LiDAR+radar 三种 setting</li>
+    </ul>
+  </div>
+  <div>
+    <h3>三阶段路线</h3>
+    <ul>
+      <li><b>Phase 1</b>(Camera-only 增强):7 个 trick,把 R50+val baseline 从 0.477 AMOTA 抬到 ~0.55-0.58</li>
+      <li><b>Phase 2</b>(Camera+LiDAR 融合,<b>论文核心创新</b>):5 个组件,目标 ~0.65-0.70 AMOTA</li>
+      <li><b>Phase 3</b>(V2-99 + test 提交):换大 backbone + offline setting,test set 冲 leaderboard</li>
+    </ul>
+  </div>
+</div>
+
+<table>
+  <tr><th>阶段</th><th>实验数</th><th>目标 AMOTA(val, R50)</th><th>预计时长</th><th>论文角色</th></tr>
+  <tr><td>Phase 0(已完成)</td><td>1(对齐)</td><td>0.476</td><td>—</td><td>baseline</td></tr>
+  <tr><td>Phase 1 主线 + leave-one-out</td><td>7 + 7</td><td>0.55-0.58</td><td>~7 天</td><td>"camera-only 已知 trick 全集" 对照点</td></tr>
+  <tr><td>Phase 2 主线 + leave-one-out</td><td>5 + 5 + 1(F0 LiDAR-only)</td><td>0.65-0.70</td><td>~7-10 天</td><td>论文核心 contribution</td></tr>
+  <tr><td>Modality 鲁棒性</td><td>4(纯 eval,免费)</td><td>—</td><td>~半天</td><td>论文 robustness section</td></tr>
+  <tr><td>Phase 3(V2-99 + test 冲分)</td><td>1-2</td><td>—(用 test split)</td><td>~2 天</td><td>leaderboard 数字</td></tr>
+  <tr><td colspan="2"><b>总计</b></td><td colspan="3"><b>~32 个实验,~17-20 天 8 卡满载</b></td></tr>
+</table>
+
+<!-- =================== 2. WHY PHASE 1 FIRST =================== -->
+<h2 id="why">2. 为什么先做 Phase 1(再次澄清)</h2>
+
+<div class="callout callout-warn">
+  <strong>之前的口误已修正</strong>:Phase 1 不是为了 "对齐 SOTA 0.667"。0.667 是 nuScenes Tracking <b>test set</b> + V2-99 backbone + offline setting,我们 R50+val+online 这套设定下的天花板大概就是 0.55-0.60(见 StreamPETR-R50 在 val 上的数字)。
+</div>
+
+<h3>Phase 1 的 4 个真正目的</h3>
+<ol>
+  <li><b>吸收 "camera-only 已发表 trick 全集"</b>,避免 Phase 2 多模态提点被审稿人质疑 "不就是因为你 baseline 没用 ContrasTR / PF-Track 吗?"</li>
+  <li><b>建立 ablation table 完整对照点</b>,论文里能写出 "已知 camera-only trick 全开 0.58 → 加 LiDAR 0.68 (+0.10 干净归因)"</li>
+  <li><b>工程基础设施压测</b>:7 次完整训练-评测-debug 循环把 codebase 隐藏 bug 全暴露,Phase 2 调试效率高一个数量级</li>
+  <li><b>R50→V2-99 升级路径解耦</b>:Phase 1 在 R50 验证过的 trick,换 V2-99 后基本继续生效;反之先跳过 trick 直接上 LiDAR,V2-99 阶段还要重做</li>
+</ol>
+
+<div class="callout callout-info">
+  <strong>关键 insight</strong>:Phase 2(Camera+LiDAR 融合)是<b>论文创新点</b>,但创新点的"提升幅度"必须在<b>已经把所有已知 camera-only trick 用尽的</b> baseline 上量化,否则审稿人会说"提升来源不明"。Phase 1 的 ROI 不是"涨几个点",是"让 Phase 2 的涨点可信"。
+</div>
+
+<!-- =================== 3. PHASE 1 =================== -->
+<h2 id="phase1">3. Phase 1: Camera-only baseline 增强</h2>
+
+<p>7 个 trick 加法式接入(每加一个,在前一个的 ckpt 上接着训)。每个 trick 单独一次完整 8 卡训练 + 评测,得到 7 个增量数字 + 1 个最终全开数字。</p>
+
+<table>
+  <tr><th>ID</th><th>名称</th><th>来源</th><th>实施成本</th><th>预期 Δ AMOTA</th><th>详细见</th></tr>
+  <tr><td>A0</td><td>baseline(已完成)</td><td>—</td><td>—</td><td>0.476(基准)</td><td>—</td></tr>
+  <tr><td>A1</td><td>Refine2D aux 2D head</td><td>chenxi onemodel(实战验证)</td><td><span class="pill pill-low">低</span></td><td>+0.02 ~ +0.03</td><td><a href="#A1">§3.1</a></td></tr>
+  <tr><td>A2</td><td>MemoryBank(替代 InstanceBank)</td><td>chenxi onemodel</td><td><span class="pill pill-low">低</span></td><td>+0.01 ~ +0.02 (IDS↓)</td><td><a href="#A2">§3.2</a></td></tr>
+  <tr><td>A3</td><td>ContrasTR loss</td><td><a href="https://arxiv.org/abs/2311.08043">ContrasTR (WACV 24)</a></td><td><span class="pill pill-low">低</span></td><td>+0.01 ~ +0.03</td><td><a href="#A3">§3.3</a></td></tr>
+  <tr><td>A4</td><td>PF-Track Spatial-Temporal Reasoner</td><td><a href="https://arxiv.org/abs/2302.03802">PF-Track (CVPR 23)</a></td><td><span class="pill pill-mid">中</span></td><td>+0.03 ~ +0.05</td><td><a href="#A4">§3.4</a></td></tr>
+  <tr><td>A5</td><td>Birth/Death 状态机</td><td><a href="https://arxiv.org/abs/2307.16675">Poly-MOT (IROS 23)</a></td><td><span class="pill pill-low">低</span></td><td>IDS↓,AMOTA 略升</td><td><a href="#A5">§3.5</a></td></tr>
+  <tr><td>A6</td><td>HQD + 物理约束 DN</td><td><a href="https://arxiv.org/abs/2406.02147">S2-Track (ICML 25)</a></td><td><span class="pill pill-low">低</span></td><td>+0.01 ~ +0.02</td><td><a href="#A6">§3.6</a></td></tr>
+  <tr><td>A7</td><td>UPD(不确定度 decoder)</td><td>S2-Track</td><td><span class="pill pill-mid">中</span></td><td>+0.01 ~ +0.02</td><td><a href="#A7">§3.7</a></td></tr>
+  <tr><td colspan="3"><b>Phase 1 全开预期</b></td><td colspan="2"><b>0.55 ~ 0.58 AMOTA(R50, val, online)</b></td><td>—</td></tr>
+</table>
+
+<!-- ---------- A1 ---------- -->
+<div class="trick-card" id="A1">
+  <h4>A1 — Refine2D 辅助 2D 监督头 <span class="pill pill-p0" style="margin-left:8px;">P0</span></h4>
+  <div class="meta">
+    <span>来源:chenxi/onemodel(已实战验证)</span>
+    <span>成本:🟢 低</span>
+    <span>预期:+0.02 ~ +0.03 AMOTA / +0.01 mAP</span>
+    <span>训练:warm-start fine-tune ~2000 iter</span>
+  </div>
+
+  <p><b>怎么改</b>:每个 3D anchor 中心投影到 6 个相机平面 → 双线性采样 image FPN feature → 一个轻量 MLP(共享所有相机)预测 (dx, dy, log_w, log_h) 和 num_cls 个 logits → 用 2D bbox 监督。<b>2D GT 自动从 3D GT 的 8 corners 投影生成,无需额外标注。</b>推理时整个模块跳过(<code>if not training: return</code>),零开销。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    Sparse4D 的 deformable aggregation 是从 anchor 周围采 keypoint 聚合 image feature,但 keypoint 位置依赖 anchor 已经"差不多准",这是个鸡生蛋问题(anchor 位置不准 → keypoint 采错地方 → feature 错 → anchor 学不准)。Refine2D 给每个 anchor 一个<b>独立的 2D 监督信号</b>(强迫"这个 anchor 中心点在图像上的位置和大小要预测对"),反向 propagate 到 image backbone 后,backbone 学到的 feature 就更"location-aware",前面的 deformable 采样质量自然提升。
+  </div>
+
+  <p><b>关键食谱</b>(必须严格遵守,否则会崩):</p>
+  <ul>
+    <li><b>必须 fine-tune,不能 from-scratch</b>:从 baseline ckpt warm-start,跑 ~2000 iter 即可</li>
+    <li><b>必须 paramwise lr 控制</b>:全局 lr 降 10x(4e-5),aux head 单独 lr_mult=10x(实际 4e-4),backbone lr_mult=0.1x(实际 4e-6 几乎冻住)</li>
+    <li><b>用 <code>gt_source='project'</code> 模式</b>(geometric 投影)。<b>不要用 <code>real_simota</code></b>(chenxi 的工程已踩坑:AMOTA 从 0.677 跌到 0.419,长尾类崩盘)</li>
+    <li>per-class loss weight 借用 chenxi 经验值(other_vehicle 3.0×, van 2.0×,其他 1.0×)作起点,我们 R50 设定下不一定 transfer,可在 A1 ckpt 上做 7-point sweep 重新调</li>
+  </ul>
+  <p class="small"><b>同源工程实测</b>:chenxi 的 RepVGG+LiDAR 设定下,refine2d_highlr recipe 把 AMOTA 从 ~0.68 提到 0.7119(<code>refine2d_highlr_top3000_thr025.log</code>)。</p>
+</div>
+
+<!-- ---------- A2 ---------- -->
+<div class="trick-card" id="A2">
+  <h4>A2 — MemoryBank 替代 InstanceBank <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:chenxi/onemodel(已实战验证)</span>
+    <span>成本:🟢 低</span>
+    <span>预期:IDS↓,AMOTA 略升</span>
+    <span>训练:从 A1 ckpt 接着训 ~50 epoch</span>
+  </div>
+
+  <p><b>怎么改</b>:把原 InstanceBank 的 ring buffer(<code>num_temp_instances=8</code>,只能存最近 8 帧 = 4 秒)换成独立容量的 <code>MemoryBank</code>(<code>num_memory_instances=512</code>,容量 64×)。temporal feature 不再随 ring buffer 滚动覆盖,而是用置信度 decay 维护一个长程 cache。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    nuScenes 2 Hz 采样下,8 帧 ring buffer 只能记住 4 秒前的物体。一个被遮挡 ≥4 秒的车再出现,原 InstanceBank 已经把它的 query feature 完全冲掉了,只能给它分新 ID(IDS+1)。512 容量的 MemoryBank 能记住几十秒前出现过的 instance,长遮挡 case 直接用 cached feature 续上同一个 ID。<b>IDS 主要降在"长遮挡 reappear"这种 case 上,纯 detection mAP 影响很小。</b>
+  </div>
+
+  <p class="small"><b>风险</b>:容量太大也会引入 false continuation(把过期 track 错误延续)。chenxi 默认 512 是经验值,可能需要在 256/512/1024 三档做小 ablation 找最优。</p>
+</div>
+
+<!-- ---------- A3 ---------- -->
+<div class="trick-card" id="A3">
+  <h4>A3 — ContrasTR loss <span class="pill pill-p0" style="margin-left:8px;">P0</span></h4>
+  <div class="meta">
+    <span>来源:ContrasTR (WACV 2024)</span>
+    <span>成本:🟢 低(纯 loss 加法)</span>
+    <span>预期:+0.01 ~ +0.03 AMOTA / IDS↓</span>
+    <span>训练:从 A2 ckpt 接着训 ~30-50 epoch</span>
+  </div>
+
+  <p><b>怎么改</b>:在 track head 输出的 query feature 上加一个 InfoNCE-style contrastive loss。同 GT instance ID 的 query 互相拉近(positive pair),不同 ID 的 query 互相推远(negative pair)。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    Sparse4D-v3 默认的关联策略是 <b>IoU + classification score</b>,但 query feature 本身从未被显式优化为 "ID-discriminative"。两个外形相近、位置相近的同类物体(比如两辆并排开的白色 SUV),Sparse4D 的 query feature 在 embedding 空间可能几乎重合,跨帧关联时极易换 ID。
+    <br><br>
+    ContrasTR 让网络在训练时显式学习 "同 ID 的 query 应该有相似 embedding,不同 ID 的应该正交",query feature 自身就成了一个强 ID-discriminator。<b>关联模块在推理时不变,但喂给它的 feature 质量大幅提升</b>,IDS 直接降。
+  </div>
+</div>
+
+<!-- ---------- A4 ---------- -->
+<div class="trick-card" id="A4">
+  <h4>A4 — PF-Track Spatial-Temporal Reasoner <span class="pill pill-p0" style="margin-left:8px;">P0</span></h4>
+  <div class="meta">
+    <span>来源:PF-Track (CVPR 2023),本地有 <code>../PF-Track/</code> 代码可复用</span>
+    <span>成本:🟡 中(需要把 PF-Track 模块嫁接进来)</span>
+    <span>预期:+0.03 ~ +0.05 AMOTA / IDS 降 ~50%</span>
+    <span>训练:从 A3 ckpt 接着训 ~50 epoch</span>
+  </div>
+
+  <p><b>怎么改</b>:在 InstanceBank.cache → 下一帧 decoder 之间插入 <b>SpatialTemporalReasoner</b>(一组 Transformer block)。它做两件事:</p>
+  <ol>
+    <li><b>Past reasoning</b>:对历史 3 帧的 query feature 做 cross-attention,refine 当前帧 query</li>
+    <li><b>Future prediction</b>:基于 motion model 预测 query 在未来 8 帧的位置,用于 inactive(被遮挡)track 保活</li>
+  </ol>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    Sparse4D 的"时序"其实只是 "把过去帧的 query feature 拼到当前帧 decoder 输入" 这种<b>隐式 temporal aggregation</b>,网络没有任何显式的 motion model。一个连续高速运动的物体,网络只能"事后"猜它的位置,跟踪滞后明显。
+    <br><br>
+    PF-Track 的 ST Reasoner 显式建模"物体在 ego coord 下的运动",<b>主动 predict 物体未来位置</b>。被短暂遮挡的 track 不再被丢弃,而是用 motion prediction 维持位置直到再次观测到。这是 IDS 大幅下降的主要来源。
+  </div>
+  <p class="small"><b>同源工程实测</b>:PF-Track 论文里 nuScenes val AMOTA 从 0.43 → 0.479(单独 +0.05),IDS 从 1100+ 降到 ~570(降 ~48%)。</p>
+</div>
+
+<!-- ---------- A5 ---------- -->
+<div class="trick-card" id="A5">
+  <h4>A5 — Birth/Death 状态机 <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:Poly-MOT (IROS 2023) / 经典 MOT 思路</span>
+    <span>成本:🟢 极低(只改 InstanceBank 的 ID 分配逻辑)</span>
+    <span>预期:IDS↓,纯 IDS 优化</span>
+    <span>训练:不需要重训,只在推理时改逻辑(post-process)</span>
+  </div>
+
+  <p><b>怎么改</b>:替换原 <code>prev_id++</code> 暴力 ID 分配,改成三态机:</p>
+  <ul>
+    <li><b>Tentative</b>(试用期):新出现的 query 先进试用期,需要连续 N 帧(默认 3)高置信才转 Confirmed</li>
+    <li><b>Confirmed</b>(确认):正常 track,丢失后允许 K 帧(默认 5)的"宽限期"才转 Dead</li>
+    <li><b>Dead</b>(死亡):彻底丢弃,后续不再关联</li>
+  </ul>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    nuScenes 评测 IDS 的两大主因:<br>
+    (1) "<b>昙花一现 false positive</b>" — 单帧偶尔的高置信 FP 直接拿到一个 ID,下一帧消失,IDS+1<br>
+    (2) "<b>短暂丢失再出现</b>" — 真物体被遮挡 1-2 帧丢失,Sparse4D 默认立刻把这个 ID 释放,物体再出现时分新 ID,IDS+1
+    <br><br>
+    状态机:Tentative 期挡掉 (1) 的所有 FP(因为它们撑不到 N 帧高置信),宽限期 K 解决 (2) 的短遮挡(直接复用原 ID)。<b>这个 trick 无需训练,纯推理逻辑</b>,但 IDS 通常能降 30-50%。
+  </div>
+</div>
+
+<!-- ---------- A6 ---------- -->
+<div class="trick-card" id="A6">
+  <h4>A6 — HQD + 物理约束 DN noise <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:S2-Track (ICML 2025) D1 + D4 模块</span>
+    <span>成本:🟢 低(改 DN noise 生成 + decoder 多层级注入)</span>
+    <span>预期:+0.01 ~ +0.02 AMOTA(主要加速收敛 + 抑制过拟合)</span>
+    <span>训练:从 A5 ckpt 接着训 ~30 epoch</span>
+  </div>
+
+  <p><b>怎么改</b>:</p>
+  <ul>
+    <li><b>HQD (Hierarchical Query Denoising)</b>:DN query 在 <b>多个 decoder 层级</b>都注入(原 Sparse4D 只在第一层注入),让深层 decoder 也有"已知答案"的监督信号</li>
+    <li><b>物理约束 DN noise</b>:原 DN noise 是纯几何高斯扰动(包括朝向 ±180° 的随机翻转),物理上不合理。改成 noise 满足<b>物理可行约束</b>:速度噪声不超过物体最大加速度,朝向噪声不超过物体最大转向角速度</li>
+  </ul>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    DN(denoising query)是 DETR 系加速收敛的关键技巧:训练时往 GT box 上加高斯噪声当作 "已知 GT" query,network 学习去噪。原 Sparse4D 的 DN noise 是<b>纯几何噪声</b>,会出现"一辆车朝向忽然反转 180°"这种物理不可能 case,网络浪费容量在学习不可能出现的分布上。
+    <br><br>
+    HQD 增加监督密度(每一层 decoder 都有 DN supervision),收敛更快;物理约束 noise 让 DN 的"先验分布"和真实分布对齐,网络容量利用率更高。这两个 trick 主要影响<b>收敛速度</b>而不是 final 数字,但在固定 epoch 数下,收敛快 = final 数字略高。
+  </div>
+</div>
+
+<!-- ---------- A7 ---------- -->
+<div class="trick-card" id="A7">
+  <h4>A7 — UPD(Uncertainty-aware Probabilistic Decoder) <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:S2-Track B3 模块</span>
+    <span>成本:🟡 中(改 attention 内部,query 输出 covariance)</span>
+    <span>预期:+0.01 ~ +0.02 AMOTA(长尾类受益最大)</span>
+    <span>训练:从 A6 ckpt 接着训 ~50 epoch</span>
+  </div>
+
+  <p><b>怎么改</b>:让 decoder query 不只输出 (x, y, z, w, l, h, sin_yaw, cos_yaw, vx, vy) 这 10 维点估计,还输出一个 <b>covariance matrix</b>(对角假设下就是 10 个 sigma)。关联时用 <b>Mahalanobis distance</b>(考虑 sigma)代替 Euclidean / IoU。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    远处物体(80 米外)的检测 inherently 不确定 — 哪怕真值就在那,网络也只能给一个粗略位置。Sparse4D 默认用统一 IoU threshold 关联远近物体:<b>近处物体几乎没漂移,IoU 阈值卡得严没问题;但远处物体跨帧位置波动 ~1 米,IoU 直接掉到 0.2,换 ID</b>。
+    <br><br>
+    UPD 让 query 自己输出 sigma:近处物体 sigma 小(关联严格),远处 sigma 大(关联宽松),自适应阈值。<b>长尾类(行人 / 自行车 / 远处车辆)IDS 改善最明显,主类影响有限</b>。
+  </div>
+</div>
+
+<!-- =================== 4. PHASE 1 LEAVE-ONE-OUT =================== -->
+<h2 id="phase1-loo">4. Phase 1 leave-one-out ablation</h2>
+
+<p>A7 全开后(7 个 trick 都打开,得到 baseline+ all 数字),依次<b>关闭一个 trick</b>跑 7 次完整训练。这 7 个数字 + A0 + A7 全开,组成论文 ablation table 的核心 7 行。</p>
+
+<table>
+  <tr><th>实验</th><th>关闭的 trick</th><th>用途</th></tr>
+  <tr><td>A7 全开</td><td>—</td><td>Phase 1 终点(camera-only 高质量 baseline)</td></tr>
+  <tr><td>A7 - Refine2D</td><td>A1</td><td>验证 Refine2D 的边际贡献</td></tr>
+  <tr><td>A7 - MemoryBank</td><td>A2</td><td>验证长程记忆的边际贡献</td></tr>
+  <tr><td>A7 - ContrasTR</td><td>A3</td><td>验证 contrastive loss 的边际贡献</td></tr>
+  <tr><td>A7 - PF-Track ST</td><td>A4</td><td>验证显式 motion model 的边际贡献</td></tr>
+  <tr><td>A7 - Birth/Death</td><td>A5</td><td>验证状态机的边际贡献</td></tr>
+  <tr><td>A7 - HQD/物理 DN</td><td>A6</td><td>验证训练稳定性 trick 的边际贡献</td></tr>
+  <tr><td>A7 - UPD</td><td>A7</td><td>验证不确定度 decoder 的边际贡献</td></tr>
+</table>
+
+<p class="small">leave-one-out 比"加法式"更严谨,因为加法式只能告诉你"加 trick X 之前 / 之后",但 trick 之间可能有非线性交互(比如 PF-Track + UPD 协同作用 > PF-Track 单独 + UPD 单独)。leave-one-out 直接告诉你"全开状态下,trick X 不可或缺的程度"。</p>
+
+<!-- =================== 5. PHASE 2 =================== -->
+<h2 id="phase2">5. Phase 2: Camera + LiDAR 融合(论文核心创新)</h2>
+
+<div class="callout callout-info">
+  <strong>Phase 2 是论文的 contribution 主线。</strong>所有 5 个组件加在一起,目标 0.65-0.70 AMOTA(val),test 上对应 0.68-0.72(对标 leaderboard 头部)。
+</div>
+
+<h3>Phase 2 启动前的数据准备(必做)</h3>
+<ul>
+  <li>当前 pkl 的 <code>sweeps len: 0</code>(我们之前验证过),Phase 2 用不了</li>
+  <li>需要重跑 <code>nuscenes_converter.py</code>,带上 <code>--max_sweeps 10</code> 同时<b>填充 LiDAR sweep 字段</b>(<code>sensor2lidar_rotation/translation/data_path/timestamp</code>)</li>
+  <li>下载 LiDAR backbone 预训练权重(VoxelNet / SECOND / CenterPoint)</li>
+  <li>(可选)预生成 LiDAR voxel cache(把 nuScenes 30k+ sweep 的体素化提前算好,避免 dataloader 成瓶颈)</li>
+</ul>
+
+<table>
+  <tr><th>ID</th><th>名称</th><th>来源</th><th>实施成本</th><th>预期 Δ AMOTA(在 A7 全开基础上)</th><th>详细见</th></tr>
+  <tr><td>F0</td><td>LiDAR-only baseline(CenterPoint,对照点)</td><td>mmdet3d 现成代码</td><td><span class="pill pill-mid">中</span></td><td>0.69 AMOTA(论文数字,纯参照)</td><td><a href="#F0">§5.1</a></td></tr>
+  <tr><td>F1</td><td>LiDAR backbone + 双模态 sampling</td><td>嫁接 chenxi onemodel hybrid_encoder</td><td><span class="pill pill-mid">中</span></td><td>+0.05 ~ +0.08</td><td><a href="#F1">§5.2</a></td></tr>
+  <tr><td>F2</td><td>FUTR3D MAFS(自适应模态加权)</td><td><a href="https://arxiv.org/abs/2203.10642">FUTR3D</a></td><td><span class="pill pill-mid">中</span></td><td>+0.01 ~ +0.02</td><td><a href="#F2">§5.3</a></td></tr>
+  <tr><td>F3</td><td>CMT 位置编码对齐</td><td><a href="https://arxiv.org/abs/2301.01283">CMT (ICCV 23)</a></td><td><span class="pill pill-mid">中</span></td><td>+0.01 ~ +0.02</td><td><a href="#F3">§5.4</a></td></tr>
+  <tr><td>F4</td><td>Masked-modal training(鲁棒性 + paper story 关键)</td><td>CMT</td><td><span class="pill pill-low">低</span></td><td>mAP 持平,modality dropout 鲁棒性大幅提升</td><td><a href="#F4">§5.5</a></td></tr>
+  <tr><td>F5</td><td>BEVDepth 显式深度监督</td><td><a href="https://arxiv.org/abs/2206.10092">BEVDepth (AAAI 23)</a></td><td><span class="pill pill-mid">中</span></td><td>+0.01 ~ +0.02</td><td><a href="#F5">§5.6</a></td></tr>
+</table>
+
+<!-- ---------- F0 ---------- -->
+<div class="trick-card" id="F0">
+  <h4>F0 — LiDAR-only baseline(CenterPoint)<span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:CenterPoint(mmdet3d 现成代码)</span>
+    <span>成本:🟡 中</span>
+    <span>预期:AMOTA 0.69(论文数字,纯参照)</span>
+    <span>训练:1 次 ~12-18h</span>
+  </div>
+
+  <p><b>怎么改</b>:不在 Sparse4D 框架内做,直接用 mmdet3d 的 CenterPoint config 跑一次 8 卡训练,得到 LiDAR-only 的 nuScenes val AMOTA。</p>
+
+  <div class="why">
+    <strong>为什么必须做这一行?</strong>
+    论文必须回答审稿人的"<b>你的融合是不是只是把 LiDAR 信息塞进来,没有真正的 fusion design?</b>"。F0 给出 "纯 LiDAR 能到 0.69" 这个上界,我们的 F5 多模态如果能到 0.70+,说明融合带来了 LiDAR 自身做不到的 marginal gain。<b>这是论文 contribution 成立的必要数字。</b>
+  </div>
+</div>
+
+<!-- ---------- F1 ---------- -->
+<div class="trick-card" id="F1">
+  <h4>F1 — LiDAR backbone + 双模态 sampling <span class="pill pill-p0" style="margin-left:8px;">P0</span></h4>
+  <div class="meta">
+    <span>来源:嫁接 chenxi/onemodel 的 <code>hybrid_encoder</code> + <code>pts_*</code> backbone</span>
+    <span>成本:🟡 中(代码已有,主要是 port)</span>
+    <span>预期:+0.05 ~ +0.08 AMOTA / +0.04 ~ +0.06 mAP</span>
+    <span>训练:1 次 ~18-24h</span>
+  </div>
+
+  <p><b>怎么改</b>:</p>
+  <ol>
+    <li>加 LiDAR backbone:<code>VoxelEncoder</code>(SECOND 风格,sparse 3D conv)→ <code>BEVNeck</code> → 输出 256 通道 BEV feature(grid 192×192)</li>
+    <li>修改 InstanceBank query 的 sampling 路径:每个 query 不只从 image FPN 采样 keypoint,<b>同时从 LiDAR BEV 采样一个 keypoint</b>(query 的 3D anchor center 投影到 BEV grid → bilinear 采样)</li>
+    <li>两路 feature 用 sum 或 concat 后送进 deformable aggregation(F1 默认 sum,F2 会换成 attention 加权)</li>
+  </ol>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    image 的优势:dense texture / color / fine-grained class info(分得清"这是 trafficcone 还是 pedestrian");<br>
+    image 的劣势:<b>depth 模糊</b>(单目深度估计误差远 > 1 米,远距离更差),<b>遮挡敏感</b>;<br>
+    LiDAR 的优势:<b>精确 depth / 3D shape</b>(直接测距,误差 ~5 cm);<br>
+    LiDAR 的劣势:<b>texture 缺失</b>(纯几何点云分不清两辆同形状车),稀疏类难分(行人和路灯杆点云相似)。
+    <br><br>
+    两个模态的优劣势<b>几乎完全互补</b>。F1 把两路 feature 简单求和,query 同时拿到"我应该是什么(image)+ 我精确在哪(lidar)",远距离物体定位 / 复杂语义类区分都受益。
+  </div>
+  <p class="small"><b>同源工程实测</b>:chenxi 的 RepVGG-LiDAR (相当于 F1 + 一些其他 trick) 在 nuScenes val 上 AMOTA 0.68+,远超 camera-only 0.55-0.58。</p>
+</div>
+
+<!-- ---------- F2 ---------- -->
+<div class="trick-card" id="F2">
+  <h4>F2 — FUTR3D MAFS(Modality-Adaptive Feature Sampling)<span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:FUTR3D (CVPRW 2023)</span>
+    <span>成本:🟡 中(改 sampling head)</span>
+    <span>预期:+0.01 ~ +0.02 AMOTA</span>
+    <span>训练:1 次 ~18-24h</span>
+  </div>
+
+  <p><b>怎么改</b>:把 F1 的"image_feat + lidar_feat 求和"换成 attention 加权:</p>
+  <pre><code>fused = w_img * image_feat + w_lid * lidar_feat
+where (w_img, w_lid) = softmax(MLP([query_feat, image_feat, lidar_feat]))
+</code></pre>
+  <p>加权系数对每个 query 单独学习,让 query 自己决定"我这次更相信哪个模态"。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    F1 的固定权重对所有 case 一视同仁,但 modality dominance 是 case-by-case 的:<br>
+    (1) <b>远距离小物体</b>:LiDAR 反射稀疏(可能只有 3-5 个点),image 的语义特征更可靠<br>
+    (2) <b>近处大物体被遮挡</b>:image 看到的是遮挡物,LiDAR 还能扫到一部分,LiDAR 更可靠<br>
+    (3) <b>下雨夜晚</b>:image 噪声大,LiDAR 反而更稳定<br><br>
+    MAFS 让 query 根据自身情况自适应权重,理论上严格 ≥ F1 的固定权重。<b>但实测 +0.01 ~ +0.02 提升不算特别大,主要价值是为 F4 的 masked-modal training 铺垫</b>(只有自适应权重,modality drop 才有意义)。
+  </div>
+</div>
+
+<!-- ---------- F3 ---------- -->
+<div class="trick-card" id="F3">
+  <h4>F3 — CMT 位置编码对齐 <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:CMT (ICCV 2023)</span>
+    <span>成本:🟡 中(改 PE 模块)</span>
+    <span>预期:+0.01 ~ +0.02 AMOTA</span>
+    <span>训练:1 次 ~18-24h</span>
+  </div>
+
+  <p><b>怎么改</b>:</p>
+  <ul>
+    <li>image token PE:从原 2D pixel sin/cos PE 换成 <b>frustum 3D PE</b>(根据相机内外参,把 2D pixel 反投影到 3D 视锥的多个 depth 层,每层一个 3D 坐标 → sin/cos PE)</li>
+    <li>LiDAR token PE:从原 BEV grid index PE 换成 <b>BEV 3D 坐标 PE</b>(直接用每个 BEV grid cell 的物理坐标 (x, y, 0) 做 sin/cos PE)</li>
+    <li>两路 PE 在<b>同一个 3D 物理空间</b>对齐</li>
+  </ul>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    Sparse4D 默认 image PE 是 2D 像素空间,LiDAR PE 是 BEV grid 空间,两路 PE <b>不在同一个空间</b>。Transformer attention 算 Q·K 时,PE 数值大的一边会主导(常常是 LiDAR 因为 BEV grid index 数值范围更大)。这种 "PE 偏向" 让 attention 不再基于真实 3D 距离,而是 PE 数值大小。
+    <br><br>
+    CMT 把两路 PE 都映射到 3D 物理空间,attention <b>基于真实 3D 距离</b>。一个 query 在物理空间近的 image patch 和 LiDAR voxel 都会被等量关注。
+  </div>
+</div>
+
+<!-- ---------- F4 ---------- -->
+<div class="trick-card" id="F4">
+  <h4>F4 — Masked-modal training <span class="pill pill-p0" style="margin-left:8px;">P0</span></h4>
+  <div class="meta">
+    <span>来源:CMT</span>
+    <span>成本:🟢 低(几行 mask 代码)</span>
+    <span>预期:mAP 持平,modality dropout 鲁棒性大幅提升</span>
+    <span>训练:1 次 ~18-24h</span>
+  </div>
+
+  <p><b>怎么改</b>:训练时,每个 batch 以 30% 概率<b>整体 zero-out</b> image FPN feature(模拟相机失效),以 30% 概率整体 zero-out LiDAR BEV feature(模拟 LiDAR 失效);60% 概率两路都正常。推理不变。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    没有 masked training 时,网络会在训练中形成 "<b>modality shortcut</b>" — 比如 LiDAR 总是给出准确 depth,网络就<b>不再训练 image 的 depth 预测能力</b>(反正 LiDAR 帮我做了)。一旦推理时 LiDAR 失效,网络立刻崩盘(mAP 可能直接腰斩)。
+    <br><br>
+    Masked training 强制网络两种情况都要应付:<b>纯 image 也能做、纯 LiDAR 也能做、双模态时还能融合</b>。代价是训练时网络更难收敛(loss 噪声大),但推理时:<br>
+    (1) <b>graceful degradation</b>:车上传感器失效后性能不崩盘<br>
+    (2) <b>4 种推理模式都可用</b>:cam+lidar / cam-only / lidar-only / random-drop,这是论文 "<b>对标 DualViewDistill</b>" 的核心 story
+  </div>
+  <p class="small"><b>F4 是 paper story 的关键拼图</b>:DualViewDistill 0.669 是 camera-only 推理(用 LiDAR 做 distillation 但不参与推理),我们的 F4+ 模型可以做<b>所有推理 setting</b>:cam-only(对比 DualViewDistill)、cam+lidar(SOTA 数字)、lidar-only(对标 CenterPoint),一篇 paper 同时占 3 个 leaderboard 位置。</p>
+</div>
+
+<!-- ---------- F5 ---------- -->
+<div class="trick-card" id="F5">
+  <h4>F5 — BEVDepth 显式深度监督 <span class="pill pill-p1" style="margin-left:8px;">P1</span></h4>
+  <div class="meta">
+    <span>来源:BEVDepth (AAAI 2023)</span>
+    <span>成本:🟡 中(替换 DenseDepthNet)</span>
+    <span>预期:+0.01 ~ +0.02 AMOTA</span>
+    <span>训练:1 次 ~18-24h</span>
+  </div>
+
+  <p><b>怎么改</b>:Sparse4D 自带的 DenseDepthNet 用<b>稀疏的 anchor 中心 depth</b>作为监督(每个 image 只有几百个监督点),改成用 <b>LiDAR 投影点</b>作为 dense depth GT(每个 image 有 1-2 万个监督点,密度高 100x)。Loss 变成 dense regression。</p>
+
+  <div class="why">
+    <strong>为什么有效?</strong>
+    image FPN 的 depth 预测精度<b>直接决定 image-LiDAR 融合质量</b> — depth 不准的话,image 的 query 在 LiDAR BEV 上采样位置就错了,F1-F3 的 fusion design 全部白搭。
+    <br><br>
+    DenseDepthNet 的稀疏监督是 "在已知物体中心点 depth 准就行",但 image FPN 是个全图 representation,只有几百个监督点会让大部分像素的 depth 预测处于"无监督"状态。<br><br>
+    BEVDepth 用 LiDAR 投影点做 dense GT,<b>每个像素都有 depth GT</b>,FPN 的 depth 表征质量大幅提升,后续 image→3D frustum 投影更准,fusion 质量自然更高。这是个"通过监督密度提升 backbone 质量"的 trick。
+  </div>
+</div>
+
+<!-- =================== 6. PHASE 2 LEAVE-ONE-OUT =================== -->
+<h2 id="phase2-loo">6. Phase 2 leave-one-out ablation</h2>
+
+<p>跟 Phase 1 同理,F5 全开后依次关闭一个组件。这 5 个数字是<b>论文 Phase 2 ablation table 的核心</b>。</p>
+
+<table>
+  <tr><th>实验</th><th>关闭的组件</th><th>用途</th></tr>
+  <tr><td>F5 全开</td><td>—</td><td>论文 SOTA 数字</td></tr>
+  <tr><td>F5 - LiDAR backbone</td><td>F1</td><td>实际等价于 A7 + 其他 F2-F5(无 LiDAR);用于验证"没有 LiDAR 时,F2-F5 的所有 fusion 设计是否还有意义"</td></tr>
+  <tr><td>F5 - MAFS(回到固定权重)</td><td>F2</td><td>验证自适应加权的边际贡献</td></tr>
+  <tr><td>F5 - CMT PE(回到 2D pixel + grid PE)</td><td>F3</td><td>验证 PE 对齐的边际贡献</td></tr>
+  <tr><td>F5 - Masked-modal(训练时不 drop)</td><td>F4</td><td>验证 modality dropout 的鲁棒性贡献(配合 §7 一起评)</td></tr>
+  <tr><td>F5 - BEVDepth(用稀疏 DenseDepthNet)</td><td>F5</td><td>验证 dense depth supervision 的边际贡献</td></tr>
+</table>
+
+<!-- =================== 7. ROBUSTNESS =================== -->
+<h2 id="robustness">7. Modality 鲁棒性评测(几乎免费)</h2>
+
+<p>F4 训练完后,直接复用 F5 的 ckpt,在<b>不同推理 setting</b> 下做评测。<b>不需要重训,只需 4 次 evaluation,~半天搞定</b>。</p>
+
+<table>
+  <tr><th>ID</th><th>评测 setting</th><th>用途</th><th>预期</th></tr>
+  <tr><td>G1</td><td>推理时 zero-out LiDAR(纯 camera 推理)</td><td>对标 DualViewDistill 0.669</td><td>val AMOTA 0.60-0.65(在 F5 设定下)</td></tr>
+  <tr><td>G2</td><td>推理时 zero-out camera(纯 LiDAR 推理)</td><td>对标 CenterPoint LiDAR-only F0</td><td>val AMOTA 0.65-0.70</td></tr>
+  <tr><td>G3</td><td>推理时随机 drop 1-2 个相机(模拟相机故障)</td><td>论文 robustness section</td><td>性能下降曲线</td></tr>
+  <tr><td>G4</td><td>推理时 LiDAR 点云下采样 50% / 25%(模拟低线 LiDAR)</td><td>论文 cost-efficiency section</td><td>性能保留率</td></tr>
+</table>
+
+<div class="callout callout-ok">
+  <strong>G1 是核心 paper story 杀手锏</strong>:同一个 ckpt,纯 camera 推理对标 DualViewDistill 0.669 + 双模态推理对标 SOTA + LiDAR-only 对标 CenterPoint = 一篇 paper 三个 setting 同时占榜。
+</div>
+
+<!-- =================== 8. PHASE 3 =================== -->
+<h2 id="phase3">8. Phase 3: V2-99 backbone + test set 冲分</h2>
+
+<p>Phase 2 全部完成后,进入 leaderboard 冲分阶段。所有 trick / 融合方案不变,只换 backbone:</p>
+<table>
+  <tr><th>步骤</th><th>改动</th><th>训练时长</th></tr>
+  <tr><td>1</td><td>下载 V2-99 ImageNet 预训练权重(<a href="https://github.com/youngwanLEE/vovnet-detectron2">VoVNetV2</a>)</td><td>—</td></tr>
+  <tr><td>2</td><td>把 F5 config 的 backbone 从 R50 改成 V2-99,其他不变</td><td>—</td></tr>
+  <tr><td>3</td><td>在 train+val 联合数据上重训(test 提交标准做法)</td><td>~24h</td></tr>
+  <tr><td>4</td><td>(可选)offline mode:推理时使用未来帧(对标 Sparse4D-v3-offline 0.677)</td><td>纯推理</td></tr>
+  <tr><td>5</td><td>nuScenes test server 提交</td><td>—</td></tr>
+</table>
+
+<p class="small"><b>V2-99 vs R50 通常 +0.05-0.07 AMOTA</b>(参考 Sparse4D-v3 R50 0.643 vs V2-99 0.677,涨 +0.034 但叠加了其他改动)。</p>
+
+<!-- =================== 9. PAPER STORY =================== -->
+<h2 id="story">9. 论文 story line(对标 DualViewDistill 0.669)</h2>
+
+<h3>Title 候选</h3>
+<ul>
+  <li>"Sparse4D-MM: Modality-Adaptive Sparse Tracking with Graceful Degradation"</li>
+  <li>"Unified Sparse Tracking across Camera, LiDAR, and Mixed Modalities"</li>
+</ul>
+
+<h3>Intro 框架</h3>
+<ol>
+  <li>nuScenes tracking 方向:camera-only 已被 DualViewDistill 等推到 0.669,LiDAR-only 在 CenterPoint 系做到 0.69+,但<b>真正端到端融合的 tracking 方法仍未到这两者的 marginal sum</b></li>
+  <li>主流融合方法的局限:固定权重不自适应、PE 不对齐、训练时 modality shortcut、推理时单模态退化崩盘</li>
+  <li>我们提出统一融合 + masked-modal training,<b>同一个 ckpt 三种推理模式都做到 SOTA</b></li>
+  <li>contributions: ① modality-adaptive fusion(F2-F3); ② masked-modal training for graceful degradation(F4); ③ dense depth supervision via LiDAR projection(F5); ④ extensive ablation 证明每个组件的贡献</li>
+</ol>
+
+<h3>对比对手 leaderboard 表</h3>
+<table>
+  <tr><th>方法</th><th>Modality(train)</th><th>Modality(infer)</th><th>val AMOTA</th><th>test AMOTA</th></tr>
+  <tr><td>Sparse4D-v3</td><td>Cam</td><td>Cam</td><td>0.477</td><td>0.643</td></tr>
+  <tr><td>StreamPETR-Large</td><td>Cam</td><td>Cam</td><td>—</td><td>0.653</td></tr>
+  <tr><td>DualViewDistill</td><td>Cam+Lidar(distill)</td><td>Cam</td><td>—</td><td>0.669</td></tr>
+  <tr><td>Sparse4D-v3-offline</td><td>Cam</td><td>Cam(future frames)</td><td>—</td><td>0.677</td></tr>
+  <tr><td>CenterPoint(LiDAR baseline)</td><td>Lidar</td><td>Lidar</td><td>—</td><td>~0.65</td></tr>
+  <tr><td><b>Ours (G1, cam-only inference)</b></td><td>Cam+Lidar</td><td>Cam</td><td>0.60-0.65</td><td>0.67+</td></tr>
+  <tr><td><b>Ours (G2, lidar-only inference)</b></td><td>Cam+Lidar</td><td>Lidar</td><td>0.65-0.70</td><td>0.69+</td></tr>
+  <tr><td><b>Ours (F5, full inference)</b></td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>0.65-0.70</td><td>0.70+</td></tr>
+</table>
+
+<!-- =================== 10. INFRA =================== -->
+<h2 id="infra">10. 工程基础设施(共用)</h2>
+
+<h3>10.1 aux_modules hook 框架(<b>所有 ablation 共用,优先级 P0,先做</b>)</h3>
+
+<p>嫁接 chenxi/onemodel <code>head.py</code> 的 aux_modules 机制,在 Sparse4D head 暴露两个 callback:</p>
+<pre><code>after_decoder(ctx, output)   # head.forward 末尾调用
+after_loss(ctx, output)      # head.loss 末尾调用,DDP key 一致性自动维护
+</code></pre>
+<p>之后所有 aux head(Refine2D / ContrasTR / 任何未来 trick)都用同一种方式挂入 config:</p>
+<pre><code>model = dict(
+    head = dict(
+        aux_modules = dict(
+            refine2d = dict(type='SparseBox2DRefinement', ...),
+            contrastr = dict(type='ContrasTRLoss', ...),
+        )
+    )
+)
+</code></pre>
+<p><b>head.py 自身零改动</b>。这是 7+5 个 trick 都受益的一次性投资。</p>
+
+<h3>10.2 Config flag 框架</h3>
+<p>新建 <code>projects/configs/_base_/sparse4dv3_with_flags.py</code>,把所有 trick 的开关 / 超参 / loss weight 全做成可 override 字段(默认全 False / baseline 值)。所有 ablation config 形如:</p>
+<pre><code>_base_ = ['../_base_/sparse4dv3_with_flags.py']
+
+# 只覆盖要改的 flag
+trick_flags = dict(
+    enable_refine2d = True,
+    enable_contrastr = True,
+)
+</code></pre>
+
+<h3>10.3 实验命名规范</h3>
+<table>
+  <tr><th>类型</th><th>路径</th><th>分支</th></tr>
+  <tr><td>Phase 1 加法式</td><td><code>projects/configs/ablations/expA1_refine2d.py</code> ... <code>expA7_full.py</code></td><td><code>lqy/feature/&lt;trick&gt;</code></td></tr>
+  <tr><td>Phase 1 leave-one-out</td><td><code>expA7_loo_no_&lt;trick&gt;.py</code></td><td><code>lqy/exp/loo-&lt;trick&gt;</code></td></tr>
+  <tr><td>Phase 2 加法式</td><td><code>expF1_lidar.py</code> ... <code>expF5_full.py</code></td><td><code>lqy/feature/&lt;component&gt;</code></td></tr>
+  <tr><td>Phase 3 V2-99</td><td><code>expV99_test_submit.py</code></td><td><code>lqy/feature/v299-test</code></td></tr>
+</table>
+
+<h3>10.4 训练命令统一化</h3>
+<p>把 <code>scripts/03_train_baseline.sh</code> 改成接受 <code>CONFIG=</code> 环境变量:</p>
+<pre><code class="lang-bash">USE_GLOBAL_PYTHON=1 \
+CONFIG=projects/configs/ablations/expA1_refine2d.py \
+WORK_DIR=work_dirs/expA1_refine2d \
+bash scripts/03_train_baseline.sh
+</code></pre>
+<p><b>选项含义</b>:</p>
+<ul>
+  <li><code>USE_GLOBAL_PYTHON=1</code>:走系统 python3.11(镜像友好,跳过 venv 查找)</li>
+  <li><code>CONFIG=...</code>:本次训练用的 config 路径(默认是 baseline,这里 override)</li>
+  <li><code>WORK_DIR=...</code>:输出目录(默认 <code>work_dirs/baseline_v3_r50_repro</code>,这里 override)</li>
+</ul>
+
+<h3>10.5 结果汇总脚本(新增 <code>scripts/05_summarize_ablation.sh</code>)</h3>
+<p>扫所有 <code>work_dirs/exp*/results/img_bbox/metrics_summary.json</code>,生成 markdown / CSV 表,自动跟 A0 对比 Δ。具体行为:</p>
+<ul>
+  <li><b>输入</b>:<code>work_dirs/</code> 下所有以 <code>exp</code> 开头的子目录</li>
+  <li><b>输出</b>:<code>docs/results_table.md</code>(每行一个实验,字段 = config / ckpt / mAP / NDS / AMOTA / AMOTP / IDS / Δ_AMOTA_vs_baseline)</li>
+  <li><b>选项</b>:<code>--baseline expA0</code> 指定哪个实验当作 0 比较的基准</li>
+</ul>
+
+<!-- =================== 11. TIMELINE =================== -->
+<h2 id="timeline">11. 资源估算 & 时间表</h2>
+
+<table>
+  <tr><th>阶段</th><th>实验</th><th>单次时长</th><th>累计</th></tr>
+  <tr><td>基础设施</td><td>aux_modules hook 重构 + config flag 框架 + 训练脚本统一化</td><td>~1 天纯写代码</td><td>1 天</td></tr>
+  <tr><td>Phase 1 加法式</td><td>A1 → A7,7 次</td><td>~12-18h × 7</td><td>+ 4-5 天</td></tr>
+  <tr><td>Phase 1 leave-one-out</td><td>A7 - 单 trick,7 次</td><td>~12-18h × 7</td><td>+ 4-5 天</td></tr>
+  <tr><td>Phase 2 数据准备</td><td>重跑 converter 带 LiDAR sweeps + voxel cache 预生成</td><td>~6-8h(converter) + ~1 晚(cache,可选)</td><td>+ 0.5-1 天</td></tr>
+  <tr><td>Phase 2 加法式</td><td>F0 + F1 → F5,6 次</td><td>~18-24h × 6</td><td>+ 5-7 天</td></tr>
+  <tr><td>Phase 2 leave-one-out</td><td>F5 - 单组件,5 次</td><td>~18-24h × 5</td><td>+ 4-5 天</td></tr>
+  <tr><td>Modality 鲁棒性</td><td>G1-G4 evaluation,纯推理</td><td>~30 min × 4 = 2h</td><td>+ 半天</td></tr>
+  <tr><td>Phase 3 V2-99 + test 提交</td><td>1-2 次完整训练 + test eval</td><td>~24-36h</td><td>+ 1-2 天</td></tr>
+  <tr><td>论文写作 buffer</td><td>—</td><td>—</td><td>+ 2-3 天</td></tr>
+  <tr><td><b>总计(连续 8 卡满载)</b></td><td>—</td><td>—</td><td><b>~22-28 天</b></td></tr>
+</table>
+
+<p class="small"><b>注意</b>:这是"连续 8 卡满载"理想时间。实际会因为 debug / restart / 评测冲突 / 工程突发等慢 30-50%,所以保守估计 <b>4-5 周</b>(适合冲 ECCV / NeurIPS 截稿)。</p>
+
+<!-- =================== 12. RISK =================== -->
+<h2 id="risk">12. 风险点 / 决策点(等你拍板)</h2>
+
+<table>
+  <tr><th>#</th><th>问题</th><th>选项</th><th>我的推荐</th></tr>
+  <tr>
+    <td>D1</td>
+    <td>是否做 leave-one-out?(代价:Phase 1 多 4-5 天,Phase 2 多 4-5 天)</td>
+    <td>A. 全做(论文 ablation table 完整) / B. 只做加法式(快 9 天但 paper 缺数据)</td>
+    <td><b>A</b>(没 leave-one-out 论文一定被 reviewer 质疑)</td>
+  </tr>
+  <tr>
+    <td>D2</td>
+    <td>F0 LiDAR-only baseline 怎么做?</td>
+    <td>A. 直接用 mmdet3d CenterPoint 出数(快但跟我们 framework 解耦) / B. 在 Sparse4D 框架内做 LiDAR-only(慢 1-2 天但严格控制变量)</td>
+    <td><b>A</b>(F0 只是参照点,不需要严格控制变量,主轴在 F1-F5)</td>
+  </tr>
+  <tr>
+    <td>D3</td>
+    <td>是否引入 Radar(H1/H2)?</td>
+    <td>A. 不做(节省 1.5 天) / B. 做 H2(F5 + radar = 三模态)突出 cost-efficiency</td>
+    <td><b>A</b>(scope creep,paper 故事已经够丰富)</td>
+  </tr>
+  <tr>
+    <td>D4</td>
+    <td>Refine2D 的 per-class loss weight 怎么调?</td>
+    <td>A. 直接用 chenxi 经验值(other_vehicle 3.0×, van 2.0×) / B. 在 A1 ckpt 上做 7-point sweep 重新调</td>
+    <td><b>A 起步</b>,如果 R50 设定下数字不达预期再做 B</td>
+  </tr>
+  <tr>
+    <td>D5</td>
+    <td>是否能拿到 chenxi 训出的、带 refine2d 的 ckpt 直接 fine-tune?</td>
+    <td>A. 拿(直接节省 ~2 天 baseline 训练) / B. 不拿(完全独立)</td>
+    <td><b>A 优先</b>(如果他愿意分享),节省时间且可验证 trick transfer 性</td>
+  </tr>
+  <tr>
+    <td>D6</td>
+    <td>Masked-modal training 的 drop 概率是多少?</td>
+    <td>原 CMT 是 30%,我们可调 20% / 30% / 50%</td>
+    <td>30% 起步,F4 ckpt 上做 small ablation 找最优</td>
+  </tr>
+  <tr>
+    <td>D7</td>
+    <td>Phase 3 V2-99 是否做 offline mode?</td>
+    <td>A. 做(对标 Sparse4D-v3-offline 0.677) / B. 不做</td>
+    <td><b>A</b>(纯推理改动,~2-4 小时,几乎免费)</td>
+  </tr>
+</table>
+
+<!-- =================== 13. PAPER ABLATION TABLE =================== -->
+<h2 id="paper-table">13. 论文 ablation table 模板(交付物示意)</h2>
+
+<table>
+  <tr><th>Method</th><th>Modality(train)</th><th>Modality(infer)</th><th>mAP</th><th>NDS</th><th>AMOTA</th><th>AMOTP</th><th>IDS</th></tr>
+  <tr><td><i>Sparse4D-v3 (R50, baseline,已验证)</i></td><td>Cam</td><td>Cam</td><td>0.465</td><td>0.564</td><td>0.476</td><td>1.136</td><td>356</td></tr>
+  <tr><td colspan="8"><b>=== Phase 1: camera-only ablation (R50, val) ===</b></td></tr>
+  <tr><td>+ A1 Refine2D</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ A2 MemoryBank</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ A3 ContrasTR</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ A4 PF-Track ST</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ A5 Birth/Death</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ A6 HQD/物理 DN</td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td><b>+ A7 UPD (Phase 1 全开)</b></td><td>Cam</td><td>Cam</td><td>?</td><td>?</td><td><b>~0.55-0.58</b></td><td>?</td><td>?</td></tr>
+  <tr><td colspan="8"><b>=== Phase 2: camera + LiDAR fusion (R50, val) ===</b></td></tr>
+  <tr><td>F0 CenterPoint(LiDAR-only,参照)</td><td>Lidar</td><td>Lidar</td><td>?</td><td>?</td><td>~0.69</td><td>?</td><td>?</td></tr>
+  <tr><td>+ F1 LiDAR backbone</td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ F2 MAFS</td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ F3 CMT PE</td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>+ F4 Masked-modal</td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td><b>+ F5 BEVDepth (Phase 2 全开)</b></td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td><b>~0.65-0.70</b></td><td>?</td><td>?</td></tr>
+  <tr><td colspan="8"><b>=== Modality robustness on F5 ckpt(纯 inference,免费)===</b></td></tr>
+  <tr><td>F5 (G1, cam-only inference)</td><td>Cam+Lidar</td><td>Cam</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>F5 (G2, lidar-only inference)</td><td>Cam+Lidar</td><td>Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>F5 (G3, drop 1 cam)</td><td>Cam+Lidar</td><td>Cam(5 of 6)+Lidar</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td>F5 (G4, lidar 50% downsample)</td><td>Cam+Lidar</td><td>Cam+Lidar(half)</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+  <tr><td colspan="8"><b>=== Phase 3: V2-99 backbone, test set submission ===</b></td></tr>
+  <tr><td>Phase 3 V2-99 (test)</td><td>Cam+Lidar</td><td>Cam+Lidar</td><td>?</td><td>?</td><td><b>~0.70+</b></td><td>?</td><td>?</td></tr>
+</table>
+
+<hr>
+
+<p class="small" style="text-align: center;">
+  Generated 2026-05-26 17:20 (UTC+8) · Author: lqy · 待审阅后开工
+</p>
+
+</body>
+</html>
