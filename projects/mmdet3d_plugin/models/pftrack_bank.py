@@ -39,14 +39,21 @@ import torch
 import torch.nn as nn
 from mmcv.cnn.bricks.registry import PLUGIN_LAYERS
 
-from .instance_bank import InstanceBank
+from .memory_bank import MemoryBank
 
 __all__ = ["PFTrackInstanceBank"]
 
 
 @PLUGIN_LAYERS.register_module()
-class PFTrackInstanceBank(InstanceBank):
-    """InstanceBank + PF-Track Future Reasoning (motion prediction).
+class PFTrackInstanceBank(MemoryBank):
+    """MemoryBank + PF-Track Future Reasoning (motion prediction).
+
+    继承自 ``MemoryBank`` 而非 ``InstanceBank`` —— 这样 A_full config 可以同时启用
+    A2 (memory pool) 和 A4 (future reasoning):
+        - A4 alone (leave-out A2): num_memory_instances = num_temp_instances
+          (退化成 ring buffer 行为) + future_reasoning_enable=True
+        - A_full (A2 + A4): num_memory_instances = 512 + future_reasoning_enable=True
+    leave-out A4 时直接用 ``MemoryBank``,leave-out A2 时用此类配 num_memory=num_temp。
 
     Args:
         hist_len: 历史帧数 (默认 3,跟 PF-Track 论文一致)
