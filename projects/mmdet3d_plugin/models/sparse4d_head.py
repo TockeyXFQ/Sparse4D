@@ -50,6 +50,16 @@ class Sparse4DHead(BaseModule):
         cls_threshold_to_reg: float = -1,
         dn_loss_weight: float = 5.0,
         decouple_attn: bool = True,
+        # ---- aux_modules 钩子 (向后兼容: None 时整套机制是 no-op) ----
+        # 让 head 暴露两个 callback:
+        #   after_decoder(ctx, output): 在 forward 末尾、return 前调用
+        #   after_loss(ctx, output)   : 在 loss 末尾、return 前调用
+        # 任意 aux head (Refine2D / ContrasTR / ...) 可注册到这里,无需改 head.py。
+        # 字段语义跟 chenxi/onemodel head.py 对齐,便于代码 port。
+        aux_modules: Optional[dict] = None,
+        # 用于在 ctx 里取 lidar2img 投影矩阵的 metas key,默认 'projection_mat'
+        # (Sparse4D-V3 dataset 默认输出),Phase 2 接 LiDAR 时可改 'lidar2global'。
+        projection_mat_key: str = "projection_mat",
         init_cfg: dict = None,
         **kwargs,
     ):
@@ -119,6 +129,18 @@ class Sparse4DHead(BaseModule):
         else:
             self.fc_before = nn.Identity()
             self.fc_after = nn.Identity()
+
+        # ---- build aux_modules (保持顺序;aux_modules=None 时为空 ModuleDict) ----
+        self.projection_mat_key = projection_mat_key
+        self.aux_modules = nn.ModuleDict()
+        if aux_modules:
+            for _name, _cfg in aux_modules.items():
+                if isinstance(_cfg, dict):
+                    self.aux_modules[_name] = build_from_cfg(
+                        _cfg, PLUGIN_LAYERS
+                    )
+                else:
+                    self.aux_modules[_name] = _cfg
 
     def init_weights(self):
         for i, op in enumerate(self.operation_order):
@@ -405,6 +427,30 @@ class Sparse4DHead(BaseModule):
                 cls, anchor, self.decoder.score_threshold
             )
             output["instance_id"] = instance_id
+
+        # =========== aux_modules hook: after_decoder ============
+        # 在 forward 末尾、return 前调用每个 aux head 的 after_decoder。
+        # ctx 字段命名跟 chenxi/onemodel head.py 对齐,便于直接 port aux head 代码。
+        if len(self.aux_modules) > 0:
+            num_total = instance_feature.shape[1]
+            _aux_ctx = {
+                "feature_maps": feature_maps,
+                "feature_maps_head": feature_maps,
+                "lidar_feature": None,
+                "metas": metas,
+                "anchor": anchor,
+                "anchor_embed": anchor_embed,
+                "instance_feature": instance_feature,
+                "projection_mat_raw": metas.get(self.projection_mat_key),
+                "projection_mat_ndc": metas.get(self.projection_mat_key),
+                "num_free_instance": (
+                    num_free_instance if dn_metas is not None else num_total
+                ),
+                "training": self.training,
+            }
+            for _mod in self.aux_modules.values():
+                if hasattr(_mod, "after_decoder"):
+                    _mod.after_decoder(_aux_ctx, output)
         return output
 
     @force_fp32(apply_to=("model_outs"))
@@ -414,6 +460,11 @@ class Sparse4DHead(BaseModule):
         reg_preds = model_outs["prediction"]
         quality = model_outs["quality"]
         output = {}
+        # 给 aux_modules.after_loss 用的 last-decoder-iteration 状态;
+        # 默认 None,for 循环跑到最后一个 decoder 时才填充。
+        _last_cls_target_full = None
+        _last_reg_target_full = None
+        _last_mask_full = None
         for decoder_idx, (cls, reg, qt) in enumerate(
             zip(cls_scores, reg_preds, quality)
         ):
@@ -427,6 +478,15 @@ class Sparse4DHead(BaseModule):
             reg_target = reg_target[..., : len(self.reg_weights)]
             mask = torch.logical_not(torch.all(reg_target == 0, dim=-1))
             mask_valid = mask.clone()
+            # 在 mask 还是 (B, A) full 形状时记下 last decoder 的目标
+            # (后面 line 446 起 reg_target/mask 会被压扁成 (sum_pos,))
+            if (
+                len(self.aux_modules) > 0
+                and decoder_idx == len(cls_scores) - 1
+            ):
+                _last_cls_target_full = cls_target.clone()
+                _last_reg_target_full = reg_target.clone()
+                _last_mask_full = mask_valid.clone()
 
             num_pos = max(
                 reduce_mean(torch.sum(mask).to(dtype=reg.dtype)), 1.0
@@ -466,10 +526,33 @@ class Sparse4DHead(BaseModule):
             output[f"loss_cls_{decoder_idx}"] = cls_loss
             output.update(reg_loss)
 
-        if "dn_prediction" not in model_outs:
-            return output
-
         # ===================== denoising losses ======================
+        if "dn_prediction" in model_outs:
+            output = self._compute_dn_losses(model_outs, output)
+
+        # =========== aux_modules hook: after_loss ============
+        # 所有正常 loss + DN loss 都算完后调用 aux head 的 after_loss。
+        # 字段命名跟 chenxi/onemodel head.py 对齐。
+        if len(self.aux_modules) > 0:
+            _aux_loss_ctx = {
+                "last_cls_target_full": _last_cls_target_full,
+                "last_reg_target_full": _last_reg_target_full,
+                "last_mask_full": _last_mask_full,
+                "last_decoder_idx": len(cls_scores) - 1,
+                "metas": data,
+                "model_outs": model_outs,
+                "projection_mat_key": self.projection_mat_key,
+            }
+            for _mod in self.aux_modules.values():
+                if hasattr(_mod, "after_loss"):
+                    _mod.after_loss(_aux_loss_ctx, output)
+        return output
+
+    def _compute_dn_losses(self, model_outs, output):
+        """Compute DN denoising losses; extracted from ``loss`` to keep
+        the main path free of nested early-return logic so the
+        ``aux_modules.after_loss`` hook fires unconditionally at the
+        end of ``loss``."""
         dn_cls_scores = model_outs["dn_classification"]
         dn_reg_preds = model_outs["dn_prediction"]
 
