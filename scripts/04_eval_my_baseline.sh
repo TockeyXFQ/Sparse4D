@@ -1,8 +1,14 @@
 #!/bin/bash
 # =============================================================================
 # 评测自己训出的 baseline ckpt(detection + tracking 双指标)
-# 用法: bash scripts/04_eval_my_baseline.sh [ckpt_path]
+#
+# 用法:
+#   bash scripts/04_eval_my_baseline.sh [ckpt_path]                # 默认 8 卡
+#   GPUS=1 bash scripts/04_eval_my_baseline.sh [ckpt_path]         # 1 卡(开发机)
+#   USE_GLOBAL_PYTHON=1 GPUS=1 bash scripts/04_eval_my_baseline.sh # 镜像模式
+#
 # 默认 ckpt: work_dirs/baseline_v3_r50_repro/latest.pth
+# 时长:8 卡 ~30 min;1 卡 ~45 min(detection) + 30 min(tracking) ≈ 1.25 h
 # =============================================================================
 set -euo pipefail
 
@@ -29,9 +35,15 @@ else
     fi
 fi
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+# GPUS 数量(默认 8 卡训练机;开发机用 GPUS=1 override)
+GPUS=${GPUS:-8}
+case "${GPUS}" in
+    1) export CUDA_VISIBLE_DEVICES=0 ;;
+    8) export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ;;
+    *) echo "[FAIL] GPUS=${GPUS} not supported (only 1 or 8)"; exit 1 ;;
+esac
 export PYTHONPATH=${PWD}:${PYTHONPATH:-}
-export PORT=29513
+export PORT=${PORT:-29513}
 
 CONFIG=projects/configs/sparse4dv3_temporal_r50_1x8_bs6_256x704.py
 CKPT=${1:-work_dirs/baseline_v3_r50_repro/latest.pth}
@@ -43,15 +55,16 @@ if [ ! -f "${CKPT}" ]; then
     exit 1
 fi
 
-echo ">>> Eval my trained baseline with 8 GPUs"
+echo ">>> Eval my trained baseline with ${GPUS} GPU(s)"
 echo "    config = ${CONFIG}"
 echo "    ckpt   = ${CKPT}"
 echo "    output = ${WORK_DIR}"
 
+# tracking_test=True 已在 config 里设置,evaluate() 会同时跑 detection + tracking
 bash tools/dist_test.sh \
     "${CONFIG}" \
     "${CKPT}" \
-    8 \
+    "${GPUS}" \
     --eval bbox \
     --eval-options jsonfile_prefix="${WORK_DIR}/results" \
     2>&1 | tee "${WORK_DIR}/eval.log"
