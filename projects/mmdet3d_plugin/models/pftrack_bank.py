@@ -123,25 +123,31 @@ class PFTrackInstanceBank(MemoryBank):
         metas=None,
         feature_maps=None,
     ):
-        """Cache + (optional) future motion prediction.
+        """Cache + history deque update.
 
         Order:
             1. 父类正常 cache(更新 self.cached_feature / cached_anchor /
                confidence,topk num_temp_instances)
-            2. 把新 cached_feature 推入 hist_feature_deque(deque 满后丢最老一帧)
-            3. 如果 deque 已满(hist_len 帧都有),跑 motion_mlp 预测
-               future_offset,缓存供下帧 get() 用
+            2. 把新 cached_feature 推入 hist_feature_deque
+               (deque 满后丢最老一帧)
+
+        注意: motion_mlp 的调用不在这里,而在下一帧的 get() 里 — 否则
+        cache() 这一次的 autograd graph 在 loss_{t} backward 后被清空,
+        等到 loss_{t+1} backward 时 motion_mlp 已经不在当前 graph,
+        motion_mlp.weights 永远拿不到 gradient(DDP find_unused_parameters
+        会报错)。
         """
         # Step 1: 标准 InstanceBank.cache 逻辑(更新 self.cached_feature / anchor)
         super().cache(instance_feature, anchor, confidence, metas, feature_maps)
 
         if not self.future_reasoning_enable or self.motion_mlp is None:
             return
-        if self.cached_feature is None or self.cached_anchor is None:
+        if self.cached_feature is None:
             return
 
         # Step 2: 推入 history deque(shape: B, hist_len, num_temp, D)
-        new_feat = self.cached_feature.detach().unsqueeze(1)  # (B, 1, num_temp, D)
+        # cached_feature 已经在父类 cache 里被 detach,这里直接用即可。
+        new_feat = self.cached_feature.unsqueeze(1)  # (B, 1, num_temp, D)
         if (
             self.hist_feature_deque is None
             or self.hist_feature_deque.shape[0] != new_feat.shape[0]
@@ -158,18 +164,46 @@ class PFTrackInstanceBank(MemoryBank):
                 [self.hist_feature_deque[:, 1:], new_feat], dim=1
             )
 
-        # Step 3: 跑 motion MLP 预测 future offset
-        # input: (B, num_temp, hist_len * D);output: (B, num_temp, fut_len * 3)
-        B, hist_len, num_temp, D = self.hist_feature_deque.shape
-        # Permute to (B, num_temp, hist_len, D),flatten last 2 dims to feed MLP
-        hist_seq = self.hist_feature_deque.permute(0, 2, 1, 3).reshape(
-            B, num_temp, hist_len * D
-        )
+    def _predict_future_offset(self, batch_size, device, dtype):
+        """Run motion_mlp on hist_feature_deque, called from get() 而非 cache()
+        以确保 motion_mlp 在当前 frame 的 autograd graph 里。
+
+        DDP-critical:即使第一个 iter (deque 还没填充)也必须调用 motion_mlp,
+        否则 DDP find_unused_parameters=False 会抱怨 motion_mlp.weights 没收到
+        gradient。第一次调用时用 dummy zero 输入,output 也是 zero,加到
+        temp_anchor 上不改变其值(可视为 no-op),但 motion_mlp 在 graph 里。
+
+        Returns:
+            future_offset: (B, num_temp, fut_len, 3) — 下一帧的 motion offset。
+            首帧返回 zero tensor 但 motion_mlp 在 graph 里。
+        """
+        if self.motion_mlp is None:
+            return None
+        if self.hist_feature_deque is None:
+            # 首帧:用 zero dummy 输入,确保 motion_mlp 在 autograd graph 里
+            num_temp = self.num_temp_instances
+            hist_seq = torch.zeros(
+                batch_size, num_temp, self.hist_len * self.embed_dims,
+                device=device, dtype=dtype,
+            )
+        else:
+            B, hist_len, num_temp, D = self.hist_feature_deque.shape
+            # Permute to (B, num_temp, hist_len, D),flatten last 2 dims to feed MLP
+            hist_seq = self.hist_feature_deque.permute(0, 2, 1, 3).reshape(
+                B, num_temp, hist_len * D
+            )
         future_offset = self.motion_mlp(hist_seq)  # (B, num_temp, fut_len * 3)
-        self.future_offset = future_offset.view(B, num_temp, self.fut_len, 3)
+        return future_offset.view(future_offset.shape[0], -1, self.fut_len, 3)
 
     def get(self, batch_size, metas=None, dn_metas=None):
-        """Override get() — 在父类返回 cached_anchor 之前,apply future_offset."""
+        """Override get() — 调用 motion_mlp 算 future_offset,apply 到 temp_anchor.
+
+        关键设计: motion_mlp 在这里调用(而非 cache() 里),这样 motion_mlp
+        的 output future_offset 进入当前 frame 的 autograd graph;temp_anchor
+        被作用 future_offset 后进入 head.forward 的 decoder,最终参与 loss。
+        loss backward 时 gradient 沿 temp_anchor → future_offset → motion_mlp
+        反传,motion_mlp.weights 能正确获得 gradient。
+        """
         # Step 1: 标准 InstanceBank.get(返回 cached_feature / cached_anchor)
         (
             instance_feature,
@@ -179,20 +213,35 @@ class PFTrackInstanceBank(MemoryBank):
             time_interval,
         ) = super().get(batch_size, metas=metas, dn_metas=dn_metas)
 
-        # Step 2: 在 cached_anchor 的 (x, y, z) 上加 future_offset(只用 fut_len 0
-        # 这个槽,即下 1 帧的预测,因为 InstanceBank.get() 是为"下一帧的 get"提供
-        # cache 的入口)
-        if (
-            self.future_reasoning_enable
-            and temp_anchor is not None
-            and self.future_offset is not None
-            and self.future_offset.shape[0] == temp_anchor.shape[0]
-            and self.future_offset.shape[1] == temp_anchor.shape[1]
-        ):
-            offset_xyz = self.future_offset[:, :, 0, :]  # (B, num_temp, 3)
-            new_temp_anchor = temp_anchor.clone()
-            new_temp_anchor[..., :3] = temp_anchor[..., :3] + offset_xyz
-            temp_anchor = new_temp_anchor
+        # Step 2: 跑 motion_mlp 算 future_offset (在当前 frame 的 autograd graph 里)
+        # DDP-critical:即使 temp_anchor 是 None(第一帧无 history),也调用
+        # motion_mlp,否则 DDP find_unused_parameters=False 会抱怨。
+        if self.future_reasoning_enable and self.motion_mlp is not None:
+            # 选择正确 device/dtype:优先 anchor (current frame),fallback instance_feature
+            ref = anchor if anchor is not None else instance_feature
+            future_offset = self._predict_future_offset(
+                batch_size=ref.shape[0],
+                device=ref.device,
+                dtype=ref.dtype,
+            )
+            if (
+                future_offset is not None
+                and temp_anchor is not None
+                and future_offset.shape[1] == temp_anchor.shape[1]
+            ):
+                # 只用 fut_len 第 0 个槽(下 1 帧预测)
+                offset_xyz = future_offset[:, :, 0, :]  # (B, num_temp, 3)
+                new_temp_anchor = temp_anchor.clone()
+                new_temp_anchor[..., :3] = temp_anchor[..., :3] + offset_xyz
+                temp_anchor = new_temp_anchor
+                # 缓存,便于 debug / eval-time 可视化(无 grad 需求)
+                self.future_offset = future_offset.detach()
+            elif future_offset is not None:
+                # temp_anchor 是 None(第一帧无 history),但 motion_mlp 还是要参与
+                # graph。把 future_offset.sum() * 0 加到 instance_feature 上做
+                # zero-multiplied bridge,确保 motion_mlp.weights 通过 instance_feature
+                # → decoder → loss 链路有 grad path(grad = 0 但路径存在)。
+                instance_feature = instance_feature + future_offset.sum() * 0.0
 
         return (
             instance_feature,
