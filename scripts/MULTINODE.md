@@ -77,18 +77,44 @@ NNODES=2 NODE_RANK=1 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 \
 
 ## 4. 多机训练前必须知道的事(批量训练前看这里)
 
-### 4.1 batch size 同步放大,lr 必须 scaling
+### 4.1 LR auto-scaling — **脚本自动做,你不用手动改 config!**
 
 baseline `samples_per_gpu=6`:
 - 单机 8 卡 → `total_batch_size = 6 × 8 = 48`,baseline lr = `6e-4`
 - 20 机 160 卡 → `total_batch_size = 6 × 160 = 960`(放大 **20×**),lr **必须重调**
 
-**lr 推荐(改 config 里的 `optimizer.lr`)**:
-- linear scaling(激进,易爆梯度):`6e-4 × 20 = 1.2e-2`
-- sqrt scaling(保守,推荐):`6e-4 × √20 ≈ 2.7e-3`
-- warmup_iters 也要跟着 scale(`500 → 700~1500`)
+**脚本自动 scale lr**(默认 sqrt 策略):
+```
+TOTAL_GPUS         scale_ratio    sqrt scaling lr     linear scaling lr
+8 卡 (baseline)    1×             6.0000e-4 (不动)    6.0000e-4
+16 卡 (2 机)       2×             8.4853e-4           1.2000e-3
+32 卡 (4 机)       4×             1.2000e-3           2.4000e-3
+64 卡 (8 机)       8×             1.6971e-3           4.8000e-3
+160 卡 (20 机)     20×            2.6833e-3           1.2000e-2  ← 太激进易爆
+```
 
-**强烈建议**:多机训练前先在 2 机 16 卡 smoke 验证 lr 不爆,再上 20 机 160 卡。
+启动后 echo 会显示当前 effective lr:
+```
+AUTO LR-SCALING = sqrt scaling: lr 6.000e-04 × 4.4721 = 2.683e-03 (TOTAL_GPUS/8 = 20.0000×)
+```
+
+**默认 sqrt scaling**,适合 large-batch (≥ 256) 场景,稳健不爆梯度。  
+如果想换策略:
+```bash
+LR_SCALING=linear CONFIG=...  bash scripts/05_train_multinode.sh   # linear scaling(激进)
+LR_SCALING=none   CONFIG=...  bash scripts/05_train_multinode.sh   # 禁用 auto-scaling,完全手动调
+```
+
+**实现细节**:脚本用 `mmcv.Config.fromfile(CONFIG)` 解析 baseline lr,按 `LR_SCALING` 策略计算 scaled lr,通过 `--cfg-options optimizer.lr=...` 在启动 train.py 时**动态注入**,完全不修改 config 文件。
+
+**注意**:warmup_iters **不 scale**(因为 large batch 收敛快,不需要更长 warmup)。如果第一个 epoch 内 grad_norm > clip_thr=25 频繁触发 → 改 LR_SCALING=none 自己手动调,或在 config 里加大 `warmup_iters`。
+
+### 4.2 强烈建议先 smoke 验证再上规模
+
+`sqrt scaling` 在 nuScenes Sparse4D 上**没有官方实证数据**(论文只用 1 机 8 卡)。多机训练前**强烈建议**:
+1. 先 2 机 16 卡 smoke 跑 ~500 iter,看 grad_norm 是否健康(< 100)
+2. 如果 OK,直接跑 20 机 160 卡完整训练
+3. 如果 grad_norm > 1000(梯度爆炸),改 `LR_SCALING=none` 自己手动调小 lr
 
 ### 4.2 iter 数自动减少(epoch 数不变)
 

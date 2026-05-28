@@ -105,6 +105,59 @@ _CFG_TAG=$(basename "${CONFIG}" .py)
 WORK_DIR=${WORK_DIR:-work_dirs/${_CFG_TAG}}
 mkdir -p "${WORK_DIR}"
 
+# ----- 自动 LR Scaling(根据 TOTAL_GPUS 自动调 lr / warmup_iters)-----
+# 当 TOTAL_GPUS != BASELINE_GPUS 时,自动按 LR_SCALING 策略 scale lr,通过
+# mmcv --cfg-options 动态注入,**不修改 config 文件**。warmup_iters 同步 scale。
+#
+# 策略选择:
+#   sqrt   (默认,推荐):scaled_lr = baseline_lr × sqrt(TOTAL_GPUS / BASELINE_GPUS)
+#                                    适合 large-batch (≥ 256) 场景,稳健
+#   linear (激进):     scaled_lr = baseline_lr × (TOTAL_GPUS / BASELINE_GPUS)
+#                                    适合 small-batch (< 256),lr 涨速快
+#   none   (禁用):     不 scale,用 config 原值(用户手动调时设此项)
+#
+# warmup_iters 用相同 factor scale,保证 warmup 占比合理:
+#   单机 8 卡:  warmup_iters=500 / total=58600 = 0.85%(原值)
+#   20 机 160 卡 sqrt: warmup_iters=500×√20 ≈ 2236 / total=2930 = 76% (太长)
+#   实际只 scale lr,warmup_iters 保持原值(因为 large batch 收敛快不需要更长
+#   warmup,只需要 lr 不爆;若 grad_norm 频繁 clip,改 LR_SCALING=none 自调)
+LR_SCALING=${LR_SCALING:-sqrt}
+BASELINE_GPUS=${BASELINE_GPUS:-8}
+
+EXTRA_OPTS=()
+LR_INFO=""
+
+if [ "${LR_SCALING}" != "none" ] && [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
+    # 用 python 解析 config 拿 baseline_lr,算 scaled_lr
+    SCALED_RESULT=$(PYTHONPATH=${PYTHONPATH} python3 - <<PY 2>/dev/null
+import math, warnings
+warnings.filterwarnings('ignore')
+from mmcv import Config
+c = Config.fromfile('${CONFIG}')
+baseline_lr = float(c.optimizer.lr)
+scale_ratio = ${TOTAL_GPUS} / ${BASELINE_GPUS}
+strategy = '${LR_SCALING}'
+if strategy == 'sqrt':
+    factor = math.sqrt(scale_ratio)
+elif strategy == 'linear':
+    factor = scale_ratio
+else:
+    factor = 1.0
+scaled_lr = baseline_lr * factor
+print(f'{baseline_lr:.6e} {scaled_lr:.6e} {scale_ratio:.4f} {factor:.4f}')
+PY
+)
+    if [ -n "${SCALED_RESULT}" ]; then
+        read -r BASELINE_LR SCALED_LR SCALE_RATIO FACTOR <<< "${SCALED_RESULT}"
+        EXTRA_OPTS+=("--cfg-options" "optimizer.lr=${SCALED_LR}")
+        LR_INFO="${LR_SCALING} scaling: lr ${BASELINE_LR} × ${FACTOR} = ${SCALED_LR} (TOTAL_GPUS/${BASELINE_GPUS} = ${SCALE_RATIO}×)"
+    else
+        LR_INFO="WARN: failed to parse ${CONFIG} for baseline lr, NOT auto-scaling"
+    fi
+else
+    LR_INFO="not scaling (TOTAL_GPUS=${TOTAL_GPUS} == BASELINE_GPUS=${BASELINE_GPUS}, or LR_SCALING=none)"
+fi
+
 # ----- 启动信息 -----
 echo "================================================================="
 echo ">>> Sparse4D Multi-Node Training"
@@ -119,6 +172,7 @@ echo "  MASTER_ADDR     = ${MASTER_ADDR}"
 echo "  MASTER_PORT     = ${MASTER_PORT}"
 echo "  CUDA_VISIBLE    = ${CUDA_VISIBLE_DEVICES}"
 echo "  Python          = $(which python3) ($(python3 --version 2>&1 | head -1))"
+echo "  AUTO LR-SCALING = ${LR_INFO}"
 echo "================================================================="
 
 # ----- 启动 torchrun(替代 deprecated 的 torch.distributed.launch)-----
@@ -134,5 +188,6 @@ torchrun \
     "${CONFIG}" \
     --launcher pytorch \
     --work-dir "${WORK_DIR}" \
+    "${EXTRA_OPTS[@]}" \
     "$@" \
     2>&1 | tee -a "${WORK_DIR}/train.log"
