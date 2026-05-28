@@ -59,6 +59,15 @@ class DeformableFeatureAggregation(BaseModule):
         use_deformable_func=False,
         use_camera_embed=False,
         residual_mode="add",
+        # ---- Phase 2 F1/F2: LiDAR BEV sampling + fusion ----
+        # 默认 None = baseline 行为(camera-only,跟原版完全等价)
+        # 启用时 dict(
+        #     point_cloud_range=[-54, -54, -5, 54, 54, 3],   # BEV 物理范围
+        #     lidar_channels=256,                            # BEV feature dim
+        #     fusion_mode='sum'    # F1: features + lidar_features (P2 简单融合)
+        #              | 'mafs'    # F2: MAFS attention 加权(自适应模态)
+        # )
+        lidar_bev_sampling: Optional[dict] = None,
     ):
         super(DeformableFeatureAggregation, self).__init__()
         if embed_dims % num_groups != 0:
@@ -103,6 +112,38 @@ class DeformableFeatureAggregation(BaseModule):
             self.weights_fc = Linear(
                 embed_dims, num_groups * num_cams * num_levels * self.num_pts
             )
+
+        # ============ Phase 2 F1/F2: LiDAR BEV sampling + fusion ============
+        if lidar_bev_sampling is not None:
+            self.lidar_bev_sampling = True
+            self._lidar_pcr = lidar_bev_sampling.get(
+                "point_cloud_range", [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+            )
+            lidar_channels = int(lidar_bev_sampling.get("lidar_channels", embed_dims))
+            self._fusion_mode = lidar_bev_sampling.get("fusion_mode", "sum")
+            assert self._fusion_mode in ("sum", "mafs"), (
+                f"fusion_mode must be 'sum' (F1) or 'mafs' (F2), "
+                f"got {self._fusion_mode}"
+            )
+
+            # 把 BEV feature channel 投到 embed_dims
+            self.lidar_proj = Linear(lidar_channels, embed_dims)
+
+            if self._fusion_mode == "mafs":
+                # F2 MAFS: 每个 query 学 (w_img, w_lidar) 自适应权重
+                # input = [instance_feature, image_features, lidar_features] (3*D)
+                # output = (w_img, w_lidar) 经过 softmax
+                self.mafs_mlp = nn.Sequential(
+                    Linear(3 * embed_dims, embed_dims),
+                    nn.ReLU(inplace=True),
+                    Linear(embed_dims, 2),
+                )
+            else:
+                self.mafs_mlp = None
+        else:
+            self.lidar_bev_sampling = False
+            self.lidar_proj = None
+            self.mafs_mlp = None
 
     def init_weight(self):
         constant_init(self.weights_fc, val=0.0, bias=0.0)
@@ -155,12 +196,66 @@ class DeformableFeatureAggregation(BaseModule):
             )
             features = self.multi_view_level_fusion(features, weights)
             features = features.sum(dim=2)  # fuse multi-point features
+
+        # ============ Phase 2 F1/F2: LiDAR BEV fusion ============
+        # 在 output_proj 之前 fuse,这样 image / lidar features 在同一抽象层
+        if self.lidar_bev_sampling and metas.get("lidar_bev") is not None:
+            lidar_bev = metas["lidar_bev"]  # (B, C, H, W)
+            lidar_features = self._sample_lidar_bev(anchor, lidar_bev)
+            lidar_features = self.lidar_proj(lidar_features)  # (B, A, embed_dims)
+
+            if self._fusion_mode == "sum":
+                # F1: simple sum (固定 50:50 fusion)
+                features = features + lidar_features
+            elif self._fusion_mode == "mafs":
+                # F2 MAFS: 每个 query 学自适应权重 (image vs lidar)
+                w_input = torch.cat(
+                    [instance_feature, features, lidar_features], dim=-1
+                )
+                w = self.mafs_mlp(w_input).softmax(dim=-1)  # (B, A, 2)
+                features = (
+                    w[..., 0:1] * features + w[..., 1:2] * lidar_features
+                )
+
         output = self.proj_drop(self.output_proj(features))
         if self.residual_mode == "add":
             output = output + instance_feature
         elif self.residual_mode == "cat":
             output = torch.cat([output, instance_feature], dim=-1)
         return output
+
+    def _sample_lidar_bev(self, anchor, lidar_bev):
+        """每个 anchor 的 (x, y) 位置在 BEV feature map 上 bilinear sample.
+
+        Args:
+            anchor: (B, A, 11) — anchor 11 维 [x, y, z, w, l, h, sin, cos, vx, vy, vz]
+            lidar_bev: (B, C, H, W) — LiDAR backbone 输出的 BEV feature
+
+        Returns:
+            sampled: (B, A, C) — 每个 anchor 在 BEV 上的采样 feature
+        """
+        # anchor xyz 在 LiDAR 坐标系。映射到 BEV grid 归一化坐标 [-1, 1]
+        # 注意:LiDAR 点云的 (x, y) 经过 voxelize → SparseEncoder 后,
+        # BEV feature map 的 W 维对应 x,H 维对应 y(或反过来,取决于实现)
+        # mmdet3d 标准:H = (y_max - y_min) / voxel_y, W = (x_max - x_min) / voxel_x
+        # grid_sample 期望 grid[..., 0] = W 方向 = x_norm,grid[..., 1] = H 方向 = y_norm
+        pcr = self._lidar_pcr  # [x_min, y_min, z_min, x_max, y_max, z_max]
+        x = anchor[..., 0]
+        y = anchor[..., 1]
+        x_norm = (x - pcr[0]) / (pcr[3] - pcr[0]) * 2.0 - 1.0
+        y_norm = (y - pcr[1]) / (pcr[4] - pcr[1]) * 2.0 - 1.0
+        # grid_sample input: lidar_bev (B, C, H, W); grid (B, A, 1, 2)
+        grid = torch.stack([x_norm, y_norm], dim=-1).unsqueeze(2)
+        sampled = nn.functional.grid_sample(
+            lidar_bev.float(),
+            grid.float(),
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        # sampled: (B, C, A, 1) → (B, A, C)
+        sampled = sampled.squeeze(-1).permute(0, 2, 1)
+        return sampled
 
     def _get_weights(self, instance_feature, anchor_embed, metas=None):
         bs, num_anchor = instance_feature.shape[:2]
