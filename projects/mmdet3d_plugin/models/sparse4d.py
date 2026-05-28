@@ -183,8 +183,17 @@ class Sparse4D(BaseDetector):
         voxel_features = self.pts_voxel_encoder(voxels, num_points, coors)
         batch_size = coors[-1, 0].item() + 1
         x = self.pts_middle_encoder(voxel_features, coors, batch_size)
+        # robust dtype align: 在每个 sub-module 之前,把 x cast 成该 module weight
+        # 的 dtype。spconv (SparseEncoder) 内部可能输出 fp16(取决于版本),
+        # 而 SECOND/SECONDFPN weight 不一定被 mmcv fp16 hook patch(因为它们注册
+        # 在 mmdet3d registry 而非 mmdet registry,patch 范围不一定覆盖)。
+        # 用 weight dtype 反推 input dtype 保证不论 fp32/fp16 都能跑。
+        w_dtype = next(self.pts_backbone.parameters()).dtype
+        x = x.to(w_dtype)
         x = self.pts_backbone(x)
         if self.pts_neck is not None:
+            w_dtype = next(self.pts_neck.parameters()).dtype
+            x = x.to(w_dtype) if isinstance(x, torch.Tensor) else [t.to(w_dtype) for t in x]
             x = self.pts_neck(x)
         # SECONDFPN 输出 list,取第 0 个(只有一层)
         if isinstance(x, (list, tuple)):
