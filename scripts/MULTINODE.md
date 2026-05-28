@@ -116,6 +116,37 @@ LR_SCALING=none   CONFIG=...  bash scripts/05_train_multinode.sh   # 禁用 auto
 2. 如果 OK,直接跑 20 机 160 卡完整训练
 3. 如果 grad_norm > 1000(梯度爆炸),改 `LR_SCALING=none` 自己手动调小 lr
 
+### 4.3 自动 iter scaling — **总 epoch 不变,iter 数自动减少**
+
+baseline 主 config 里 `num_iters_per_epoch=586` 用 `num_gpus=8` hardcode 算的:
+
+```python
+total_batch_size = 48
+num_gpus = 8
+num_iters_per_epoch = int(28130 // (num_gpus * batch_size))  # = 586
+num_epochs = 100
+runner = dict(max_iters=num_iters_per_epoch * num_epochs)    # = 58600
+```
+
+多机时 mmcv **不会自动重算** `num_iters_per_epoch`,如果不修 max_iters,实际会跑 `100 × N` epoch(过训!)。
+
+**脚本自动 scale iter 数**(不管 LR_SCALING 设置):
+```
+TOTAL_GPUS    max_iters             eval/ckpt_interval     总 epoch
+8 卡          58600 (不变)          11720 (不变)           100
+16 卡 (2 机)  58600 → 29300         11720 → 5860           100
+32 卡 (4 机)  58600 → 14650         11720 → 2930           100
+64 卡 (8 机)  58600 → 7325          11720 → 1465           100
+160 卡 (20 机) 58600 → 2930         11720 → 586            100
+```
+
+启动后 echo 显示:
+```
+AUTO ITER-SCALE = 100 epoch unchanged. max_iters 58600→2930, eval_interval 11720→586, ckpt_interval 11720→586
+```
+
+**所以 `expF_full.py` 的 epoch 数永远是 100**(从 baseline `num_epochs=100` 来的),无论你用几台机器。脚本通过 `--cfg-options runner.max_iters=...` 注入,**不修改 config 文件**。
+
 ### 4.2 iter 数自动减少(epoch 数不变)
 
 mmcv 的 `IterBasedRunner` 一个 epoch 跑 `len(dataset) / total_batch_size` 个 iter。多机后 total_batch_size 放大,iter 数线性减少:

@@ -126,36 +126,87 @@ BASELINE_GPUS=${BASELINE_GPUS:-8}
 
 EXTRA_OPTS=()
 LR_INFO=""
+ITER_INFO=""
 
-if [ "${LR_SCALING}" != "none" ] && [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
-    # 用 python 解析 config 拿 baseline_lr,算 scaled_lr
-    SCALED_RESULT=$(PYTHONPATH=${PYTHONPATH} python3 - <<PY 2>/dev/null
+# 一次 python call 拿到 baseline_lr / num_iters_per_epoch / num_epochs / max_iters
+# / evaluation.interval / checkpoint.interval,然后:
+#   1. lr 按 LR_SCALING 策略 scale
+#   2. iter 数按 TOTAL_GPUS / BASELINE_GPUS scale(防多机过训)
+SCALED_RESULT=$(PYTHONPATH=${PYTHONPATH} python3 - <<PY 2>/dev/null
 import math, warnings
 warnings.filterwarnings('ignore')
 from mmcv import Config
 c = Config.fromfile('${CONFIG}')
+
 baseline_lr = float(c.optimizer.lr)
-scale_ratio = ${TOTAL_GPUS} / ${BASELINE_GPUS}
+total_gpus = ${TOTAL_GPUS}
+baseline_gpus = ${BASELINE_GPUS}
+scale_ratio = total_gpus / baseline_gpus
 strategy = '${LR_SCALING}'
+
+# ---- LR scaling factor ----
 if strategy == 'sqrt':
     factor = math.sqrt(scale_ratio)
 elif strategy == 'linear':
     factor = scale_ratio
-else:
+else:  # 'none'
     factor = 1.0
 scaled_lr = baseline_lr * factor
-print(f'{baseline_lr:.6e} {scaled_lr:.6e} {scale_ratio:.4f} {factor:.4f}')
+
+# ---- Iter scaling: 总 sample 数固定,batch 大 N× → iter 减 N× ----
+# baseline 主 config 里 num_iters_per_epoch 用 num_gpus=8 hardcode 算的,
+# 多机时不会自动重算。这里手动 scale runner.max_iters / evaluation.interval
+# / checkpoint_config.interval 三个字段,保证总 epoch 数不变。
+baseline_max_iters = int(c.runner.max_iters)
+baseline_eval_interval = int(c.evaluation.interval)
+baseline_ckpt_interval = int(c.checkpoint_config.interval)
+# scale 1/N (向下取整,避免最后超出)
+scaled_max_iters = max(int(baseline_max_iters / scale_ratio), 1)
+scaled_eval_interval = max(int(baseline_eval_interval / scale_ratio), 1)
+scaled_ckpt_interval = max(int(baseline_ckpt_interval / scale_ratio), 1)
+
+# 也输出 num_epochs 对应估计(用主 config 已 hardcode 的 num_iters_per_epoch
+# 反推,但实际 num_epochs 是 baseline_max_iters / num_iters_per_epoch)
+try:
+    num_epochs = int(getattr(c, 'num_epochs', 100))
+except Exception:
+    num_epochs = baseline_max_iters // 586  # fallback
+
+print(f'{baseline_lr:.6e} {scaled_lr:.6e} {scale_ratio:.4f} {factor:.4f} '
+      f'{baseline_max_iters} {scaled_max_iters} '
+      f'{baseline_eval_interval} {scaled_eval_interval} '
+      f'{baseline_ckpt_interval} {scaled_ckpt_interval} {num_epochs}')
 PY
 )
-    if [ -n "${SCALED_RESULT}" ]; then
-        read -r BASELINE_LR SCALED_LR SCALE_RATIO FACTOR <<< "${SCALED_RESULT}"
+
+if [ -n "${SCALED_RESULT}" ]; then
+    read -r BASELINE_LR SCALED_LR SCALE_RATIO FACTOR \
+            BASELINE_MAX_ITERS SCALED_MAX_ITERS \
+            BASELINE_EVAL_INTERVAL SCALED_EVAL_INTERVAL \
+            BASELINE_CKPT_INTERVAL SCALED_CKPT_INTERVAL \
+            NUM_EPOCHS <<< "${SCALED_RESULT}"
+
+    if [ "${LR_SCALING}" != "none" ] && [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
         EXTRA_OPTS+=("--cfg-options" "optimizer.lr=${SCALED_LR}")
-        LR_INFO="${LR_SCALING} scaling: lr ${BASELINE_LR} × ${FACTOR} = ${SCALED_LR} (TOTAL_GPUS/${BASELINE_GPUS} = ${SCALE_RATIO}×)"
+        LR_INFO="${LR_SCALING}: lr ${BASELINE_LR} × ${FACTOR} = ${SCALED_LR} (${SCALE_RATIO}×)"
     else
-        LR_INFO="WARN: failed to parse ${CONFIG} for baseline lr, NOT auto-scaling"
+        LR_INFO="not scaling (TOTAL_GPUS=${TOTAL_GPUS} == BASELINE_GPUS=${BASELINE_GPUS}, or LR_SCALING=none)"
+    fi
+
+    # iter 数永远 scale(不管 LR_SCALING 设置),否则多机会过训 N×
+    if [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
+        EXTRA_OPTS+=(
+            "runner.max_iters=${SCALED_MAX_ITERS}"
+            "evaluation.interval=${SCALED_EVAL_INTERVAL}"
+            "checkpoint_config.interval=${SCALED_CKPT_INTERVAL}"
+        )
+        ITER_INFO="${NUM_EPOCHS} epoch unchanged. max_iters ${BASELINE_MAX_ITERS}→${SCALED_MAX_ITERS}, eval_interval ${BASELINE_EVAL_INTERVAL}→${SCALED_EVAL_INTERVAL}, ckpt_interval ${BASELINE_CKPT_INTERVAL}→${SCALED_CKPT_INTERVAL}"
+    else
+        ITER_INFO="${NUM_EPOCHS} epoch (${BASELINE_MAX_ITERS} iter, no scaling needed)"
     fi
 else
-    LR_INFO="not scaling (TOTAL_GPUS=${TOTAL_GPUS} == BASELINE_GPUS=${BASELINE_GPUS}, or LR_SCALING=none)"
+    LR_INFO="WARN: failed to parse ${CONFIG}, NOT auto-scaling lr / iter"
+    ITER_INFO=""
 fi
 
 # ----- 启动信息 -----
@@ -173,6 +224,9 @@ echo "  MASTER_PORT     = ${MASTER_PORT}"
 echo "  CUDA_VISIBLE    = ${CUDA_VISIBLE_DEVICES}"
 echo "  Python          = $(which python3) ($(python3 --version 2>&1 | head -1))"
 echo "  AUTO LR-SCALING = ${LR_INFO}"
+if [ -n "${ITER_INFO}" ]; then
+    echo "  AUTO ITER-SCALE = ${ITER_INFO}"
+fi
 echo "================================================================="
 
 # ----- 启动 torchrun(替代 deprecated 的 torch.distributed.launch)-----
