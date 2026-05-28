@@ -10,7 +10,11 @@ from .augment import (
     BBoxRotation,
     PhotoMetricDistortionMultiViewImage,
 )
-from .loading import LoadMultiViewImageFromFiles, LoadPointsFromFile
+from .loading import (
+    LoadMultiViewImageFromFiles,
+    LoadPointsFromFile,
+    LoadPointsFromMultiSweepsSparse4D,
+)
 
 __all__ = [
     "InstanceNameFilter",
@@ -23,4 +27,5 @@ __all__ = [
     "NuScenesSparse4DAdaptor",
     "LoadMultiViewImageFromFiles",
     "LoadPointsFromFile",
+    "LoadPointsFromMultiSweepsSparse4D",
 ]
