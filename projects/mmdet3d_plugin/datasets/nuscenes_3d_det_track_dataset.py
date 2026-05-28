@@ -576,6 +576,15 @@ class NuScenes3DDetTrackDataset(Dataset):
         out_dir=None,
         pipeline=None,
     ):
+        # Bug fix:results_dict 必须在 for metric 循环**外**累积。原版有两个 bug:
+        # 1. ``results_dict = dict()`` 写在 for metric 内,detection 那轮算完后
+        #    tracking 轮把它重置成空 dict,detection 字段丢失。
+        # 2. ``results_dict.update(ret_dict)`` indent 错位,在 for name 外但
+        #    for metric 内,只 update 最后一次的 ret_dict。
+        # 两个 bug 一起的后果:mmcv runner 拿到的 results_dict 只有 tracking
+        # 字段(NuScenesEval 的 detection 数字虽然 print 到了 stdout,但没进
+        # results_dict,所以 train log 看不到结构化的 mAP/NDS/AMOTA 一起列出来)。
+        results_dict = dict()
         for metric in ["detection", "tracking"]:
             tracking = metric == "tracking"
             if tracking and not self.tracking:
@@ -585,16 +594,16 @@ class NuScenes3DDetTrackDataset(Dataset):
             )
 
             if isinstance(result_files, dict):
-                results_dict = dict()
                 for name in result_names:
                     ret_dict = self._evaluate_single(
                         result_files[name], tracking=tracking
                     )
-                results_dict.update(ret_dict)
+                    results_dict.update(ret_dict)
             elif isinstance(result_files, str):
-                results_dict = self._evaluate_single(
+                ret_dict = self._evaluate_single(
                     result_files, tracking=tracking
                 )
+                results_dict.update(ret_dict)
             if tmp_dir is not None:
                 tmp_dir.cleanup()
 
