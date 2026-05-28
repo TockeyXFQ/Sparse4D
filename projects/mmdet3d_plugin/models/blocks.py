@@ -200,9 +200,12 @@ class DeformableFeatureAggregation(BaseModule):
         # ============ Phase 2 F1/F2: LiDAR BEV fusion ============
         # 在 output_proj 之前 fuse,这样 image / lidar features 在同一抽象层
         if self.lidar_bev_sampling and metas.get("lidar_bev") is not None:
-            lidar_bev = metas["lidar_bev"]  # (B, C, H, W)
+            lidar_bev = metas["lidar_bev"]  # (B, C, H, W),来自 fp32 LiDAR backbone
             lidar_features = self._sample_lidar_bev(anchor, lidar_bev)
             lidar_features = self.lidar_proj(lidar_features)  # (B, A, embed_dims)
+            # Cast 回 features 的 dtype(在 fp16 训练下 features 是 half,
+            # lidar_features 默认是 fp32,直接相加会 type mismatch)
+            lidar_features = lidar_features.to(features.dtype)
 
             if self._fusion_mode == "sum":
                 # F1: simple sum (固定 50:50 fusion)

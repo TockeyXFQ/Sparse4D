@@ -134,6 +134,7 @@ class Sparse4D(BaseDetector):
 
     # ============ Phase 2 F1: LiDAR feature extraction ============
     @torch.no_grad()
+    @force_fp32()
     def voxelize(self, points):
         """List[(N_i, 5)] points -> (voxels, num_points_per_voxel, coors).
 
@@ -169,7 +170,15 @@ class Sparse4D(BaseDetector):
 
         Returns:
             lidar_bev: (B, C, H, W) — BEV feature map,送给 head 用
+
+        Note: LiDAR backbone (SparseEncoder + SECOND) 全程 fp32 运行,跟 fp16
+        image backbone 混合训练。这是 mmdet3d / CenterPoint / BEVFusion 等 SOTA
+        LiDAR 工作的标准做法 — spconv 的 fp16 支持不完整,fp32 最稳。
+        Cast 到 fp32 后,LiDAR BEV feature 在 DFA `_sample_lidar_bev` 里再被
+        cast 回 image features 的 dtype(默认 fp16)。
         """
+        # 强制 fp32:即使 dataloader 在 fp16 hook 下传 fp16 points,这里也 cast
+        points = [p.float() for p in points]
         voxels, num_points, coors = self.voxelize(points)
         voxel_features = self.pts_voxel_encoder(voxels, num_points, coors)
         batch_size = coors[-1, 0].item() + 1
