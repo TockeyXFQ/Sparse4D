@@ -72,3 +72,65 @@ alwaysApply: true
      的字段(如 `masked_modal_prob`)。
 - **触发**:AI 自察(开发时 build_detector 报错)
 - **复发记录**:
+
+## #3 [2026-05-28] 写 multi-node auto-scaling 只 scale lr,漏 scale iter 数,差点让用户多机训练过训 20×
+
+- **场景**:写 `scripts/05_train_multinode.sh` 的"多机自动适配"功能,
+  根据 `TOTAL_GPUS` 自动调整训练超参,用户启动命令一行不变。
+- **错误**:**只想到 `optimizer.lr` 一个字段需要 scale**,提交了脚本 + md 文档
+  说"用户只需 set CONFIG,其他全自动"。直到用户问"`expF_full.py` 的 epoch
+  怎么看",我审查 baseline 主 config 才发现 `num_iters_per_epoch=586` 是用
+  `num_gpus=8` hardcode 算的:
+  ```python
+  num_iters_per_epoch = int(28130 // (num_gpus * batch_size))  # = 586
+  runner.max_iters = num_iters_per_epoch * num_epochs  # = 58600 (=100 epoch)
+  ```
+  **多机时 mmcv 不会自动重算 num_iters_per_epoch**,如果不在脚本里 scale
+  `runner.max_iters / evaluation.interval / checkpoint_config.interval`,
+  20 机 160 卡跑出来会是 **2000 epoch(过训 20×)**,数据训出来全废,
+  P2 多机训练全部要重做。
+  
+  **代价测算**:如果用户没问 epoch 这个问题,直接拿脚本去 20 机 160 卡跑 P2,
+  18-24h 后会发现训练没收敛(过训严重),整个训练废掉,损失 1 天 GPU 时间 +
+  调试时间。
+- **根因**:
+  1. **没系统列清单**:写"auto-scaling"功能时,凭直觉只想到 lr,没系统地问
+     "batch size 放大 N×,baseline config 里**所有**跟 batch / num_gpus /
+     iter 数有关的字段都有哪些?"
+  2. **定式思维**:"lr scaling" 是大 batch training 的经典话题,我习惯性
+     只关注 lr,完全忽略 iter 数也是 batch-dependent 字段。
+  3. **审查 config 不完整**:写脚本时只 grep 了 `optimizer.lr`,没系统看
+     baseline config 末尾的 runner / evaluation / checkpoint_config 三块。
+- **教训**(可执行):
+  1. **写"auto-scaling"功能前,先列 batch-dependent 字段清单**。mmcv config
+     里跟 batch size / num_gpus / iter 数有关的所有字段:
+     ```
+     [必 scale - 否则过训/欠训]
+     - runner.max_iters                 (1/N scale,保持总 epoch 不变)
+     - evaluation.interval              (1/N scale,保持评测频次)
+     - checkpoint_config.interval       (1/N scale,保持 ckpt 频次)
+     [推荐 scale - 不爆梯度]
+     - optimizer.lr                     (sqrt(N) scale 推荐)
+     [视情况]
+     - lr_config.warmup_iters           (large batch 不需要更长 warmup,
+                                         我们的 baseline 500 iter 在 160 卡
+                                         下占比 17% 仍可接受,默认不动)
+     [不要 scale]
+     - data.samples_per_gpu             (单卡 batch,跟 num_gpus 解耦)
+     - lr_config.min_lr_ratio           (相对 lr,不用 scale)
+     - optimizer.weight_decay           (跟 batch 无关)
+     ```
+  2. **写代码前 review 这个清单**,逐个判断"这个字段在多机时该不该变"。
+     如果一个该 scale 的字段忘了 scale,后果可能是数据训废 + 整批实验重做。
+  3. **遇到 hardcode 的 batch-dependent 计算公式时(如 `num_gpus=8`),立刻
+     标记**这是潜在 bug 源,因为多机时不会自动 propagate。可以加个 inline
+     comment 提醒未来读者:`# WARNING: num_iters_per_epoch 用 num_gpus=8
+     hardcode,多机训练用 05_train_multinode.sh 自动 scale max_iters`。
+  4. **凡是写"用户只需做 X,其他全自动"这种宣称,必须列清单证明"全"覆盖了**。
+     提交前 review:
+        - 多机调度时改了什么 → batch_size 翻 N 倍
+        - 哪些字段跟 batch_size 有关? → 列清单
+        - 我都 scale 了吗? → 逐个核对
+- **触发**:用户指出"为什么会犯这么低级的错误"(自我审查 baseline config
+  时偶然发现,如果用户没问 epoch 这个问题,bug 会延迟到训练完成才暴露)
+- **复发记录**:
