@@ -95,6 +95,16 @@ class NuScenesSparse4DAdaptor(object):
         imgs = [img.transpose(2, 0, 1) for img in input_dict["img"]]
         imgs = np.ascontiguousarray(np.stack(imgs, axis=0))
         input_dict["img"] = DC(to_tensor(imgs), stack=True)
+
+        # Phase 2: LiDAR points 不同 sample 数量不同 (28k~50k+),不能 stack。
+        # 包装成 DataContainer(stack=False),collate 时保留为 list[Tensor]。
+        # Sparse4D.voxelize() 接收 List[Tensor] 输入。
+        if "points" in input_dict and not isinstance(input_dict["points"], DC):
+            input_dict["points"] = DC(
+                to_tensor(input_dict["points"]).float(),
+                stack=False,
+                cpu_only=False,
+            )
         return input_dict
 
     def limit_period(
