@@ -1,0 +1,74 @@
+---
+description: AI 累积的教训知识库 — 接到新任务时务必先扫一遍
+alwaysApply: true
+---
+
+# 教训知识库 (Lessons Learned)
+
+> 本文件由 AI 按 `self-reflection.mdc` 规则**自动追加**。
+> 接到新任务前,先扫一遍下方条目,避免重复踩坑。
+
+---
+
+## 维护规则(给 AI 看)
+
+1. **新建条目**:按 `self-reflection.mdc` 的"条目模板"追加到本文件**末尾**
+2. **编号**:递增整数(#1, #2, #3 ...),不复用、不跳号
+3. **同根因复发**:不新建条目,在原条目 `## 复发记录` 下加一行 `- YYYY-MM-DD: <场景>`
+4. **不删除条目**:即使过期,也保留(可标 `~~已修复~~` 删除线),保留可追溯性
+5. **每条目独立成节**:用 `## #N` 起始,方便 Grep `^## #` 统计总数
+
+---
+
+## 索引(可选维护)
+
+> 当条目超过 20 条时,在此按"根因标签"做快速索引。当前条目数较少,留空。
+
+---
+
+## 已记录的教训
+
+<!-- 新条目追加到此分隔线下方 -->
+
+## #1 [2026-05-28] 用 sample 0 验证 pkl 字段,误判"全 0"导致用户多决策一轮
+
+- **场景**:Phase 2 启动前,验证 nuScenes pkl 的 `sweeps` 字段是否填充
+- **错误**:只 Read pkl 的 `infos[0]`(`sample 0`)就断言"`sweeps len: 0`,
+  pkl 不含 LiDAR sweeps,**需要重跑 converter ~6-8h**",让用户花时间考虑
+  "是否需要 6-8h 数据准备 + LiDAR sweep 决策"。后来重新检查 sample 1 / 2
+  / 100 / 500 才发现:**只有 sample 0(每个 scene 的起点)没有 prev sweep,
+  其他 sample 都有 sweeps len=10**,pkl 完全 OK,根本不用重跑 converter。
+- **根因**:`跳过验证` + `过度自信`(只查 1 个特殊样本就外推结论)
+- **教训**:验证 pkl / dataset / 任何 list-of-dict 字段含量时,**必须采样
+  多个 index**(至少 `[0, 1, len/2, -1]` 4 个),特别注意"边界 index"
+  (如 sample 0 是 scene 起点,这种特殊样本不能代表整体)。**不要因为
+  单个样本字段为空就泛化结论**。给用户做"重大决策建议"前(尤其是涉及
+  数小时工作量的),必须采样 ≥3 个 index 验证。
+- **触发**:AI 自察(用户后续质疑后重新验证才发现)
+- **复发记录**:
+
+## #2 [2026-05-28] 用 mmdet build_backbone 构造 mmdet3d 的 SECOND,registry KeyError
+
+- **场景**:Phase 2 写 Sparse4D 主类加 LiDAR backbone(SECOND/SECONDFPN
+  /HardSimpleVFE/SparseEncoder)
+- **错误**:在 `sparse4d.py` 里直接用 `from mmdet.models import build_backbone`
+  来构造 `pts_backbone=dict(type='SECOND')`,运行时报
+  `KeyError: 'SECOND is not in the models registry'`。原因是 SECOND/
+  SECONDFPN/HardSimpleVFE/SparseEncoder 注册在 **mmdet3d 自己的 registry**,
+  不在 mmdet。同样 mmcv 的 `_base_` 继承不允许 `None → dict` 的字段类型变化
+  (子 config 加 `masked_modal_prob=dict(...)`,base 写 `masked_modal_prob=None`
+  会触发 `TypeError: ... cannot inherit from base because ... is a dict in
+  the child config but is of type NoneType in base config`)。
+- **根因**:`幻觉编造`(凭直觉用 build_backbone)+ `跳过验证`(没去 Grep
+  mmdet3d 库的 builder.py)
+- **教训**:
+  1. 涉及 **LiDAR backbone**(SECOND/SECONDFPN/HardSimpleVFE/SparseEncoder
+     /PointPillarsScatter 等)必须用
+     `from mmdet3d.models.builder import build_backbone, build_neck,
+     build_voxel_encoder, build_middle_encoder`,**不是 mmdet 的 builder**。
+  2. 写 mmcv `_base_` 继承的 config 时,**可选字段在 base 不要显式写
+     `field=None`**,直接省略让父 config 不指定该字段;或者 child 用
+     `_delete_=True` 强制覆盖。这条规则适用于所有 `Optional[dict]` 类型
+     的字段(如 `masked_modal_prob`)。
+- **触发**:AI 自察(开发时 build_detector 报错)
+- **复发记录**:
