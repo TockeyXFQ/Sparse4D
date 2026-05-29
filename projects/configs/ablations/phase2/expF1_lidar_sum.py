@@ -198,6 +198,26 @@ data = dict(
     ),
 )
 
+# ============ 全 fp32 训练(关掉 fp16 混合精度)============
+# 原因:baseline 用静态 fp16=dict(loss_scale=32.0)。静态 loss scale 在梯度出现
+# inf/nan 时**不会跳过 optimizer step**,直接 step → 权重永久 NaN 污染。
+# baseline 纯 image 路径在 loss_scale=32 下数值稳定,但 P2 新增的 LiDAR 融合
+# 路径(grid_sample → spconv SparseEncoder,fp16 激活)backward 时偶发溢出,
+# 触发上述污染 → 实测 2 机 16 卡训练从 iter 51 起 loss 全程 NaN。
+#
+# 全 fp32 确定性消除所有 fp16 溢出可能(fp32 前向已验证 clean)。代价:显存约
+# +50%、速度约 1.5-2× 慢,H20 (97GB) 完全够。
+#
+# 覆盖 base 的 fp16=dict(loss_scale=32.0) → None。mmcv 允许 child dict→None
+# (注意跟 lessons #2 的 None→dict 方向相反)。fp16=None 时 runner 用普通
+# OptimizerHook,代码里的 @auto_fp16/@force_fp32 装饰器检测 fp16_enabled=False
+# 自动 no-op(纯 fp32 运行),无副作用。
+#
+# 【速度优先的替代方案】如果以后想恢复 fp16 加速,不要用静态 loss_scale,
+# 改成动态:fp16 = dict(loss_scale='dynamic')。动态 scale 检测到 inf/nan 梯度
+# 会自动跳过该 step + 降 scale,避免权重污染(但需重新验证 LiDAR 路径稳定性)。
+fp16 = None
+
 # Note: LiDAR backbone 显存比 image-only baseline 重 (+SparseEncoder ~7M params
 # + 大 BEV feature map),如果 OOM 把 samples_per_gpu 从 6 降到 4
 # data = dict(samples_per_gpu=4)
