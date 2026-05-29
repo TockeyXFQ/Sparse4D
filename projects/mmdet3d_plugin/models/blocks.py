@@ -128,21 +128,33 @@ class DeformableFeatureAggregation(BaseModule):
 
             # 把 BEV feature channel 投到 embed_dims
             self.lidar_proj = Linear(lidar_channels, embed_dims)
+            # LayerNorm 限制 LiDAR 特征幅度(关键!没有它,裸加的 lidar_features
+            # 会无界增长,跨 6 个 decoder 层 + InstanceBank 时序 cache 累积,
+            # 最终梯度爆炸 → NaN。BEVFusion/TransFusion/FUTR3D/CMT 都做归一化)
+            self.lidar_norm = nn.LayerNorm(embed_dims)
 
             if self._fusion_mode == "mafs":
                 # F2 MAFS: 每个 query 学 (w_img, w_lidar) 自适应权重
                 # input = [instance_feature, image_features, lidar_features] (3*D)
-                # output = (w_img, w_lidar) 经过 softmax
+                # output = (w_img, w_lidar) 经过 softmax。softmax 加权自带平衡,
+                # 不需要 gate(否则 gate 在 mafs forward 不参与 → DDP unused param 崩)
                 self.mafs_mlp = nn.Sequential(
                     Linear(3 * embed_dims, embed_dims),
                     nn.ReLU(inplace=True),
                     Linear(embed_dims, 2),
                 )
+                self.lidar_gate = None
             else:
+                # 零初始化门控标量(ReZero / LayerScale):训练初期 LiDAR 贡献 = 0,
+                # 模型逐渐学会用它,避免"从零初始化 + 高 lr"的新分支早期把预训练
+                # image 路径带飞。仅 sum 模式创建(避免 mafs 模式 unused param)。
+                self.lidar_gate = nn.Parameter(torch.zeros(1))
                 self.mafs_mlp = None
         else:
             self.lidar_bev_sampling = False
             self.lidar_proj = None
+            self.lidar_norm = None
+            self.lidar_gate = None
             self.mafs_mlp = None
 
     def init_weight(self):
@@ -200,18 +212,22 @@ class DeformableFeatureAggregation(BaseModule):
         # ============ Phase 2 F1/F2: LiDAR BEV fusion ============
         # 在 output_proj 之前 fuse,这样 image / lidar features 在同一抽象层
         if self.lidar_bev_sampling and metas.get("lidar_bev") is not None:
-            lidar_bev = metas["lidar_bev"]  # (B, C, H, W),来自 fp32 LiDAR backbone
+            lidar_bev = metas["lidar_bev"]  # (B, C, H, W),来自 LiDAR backbone
             lidar_features = self._sample_lidar_bev(anchor, lidar_bev)
-            lidar_features = self.lidar_proj(lidar_features)  # (B, A, embed_dims)
-            # Cast 回 features 的 dtype(在 fp16 训练下 features 是 half,
-            # lidar_features 默认是 fp32,直接相加会 type mismatch)
+            # proj -> LayerNorm 归一化(限制幅度,防无界增长 → 梯度爆炸)
+            lidar_features = self.lidar_norm(self.lidar_proj(lidar_features))
+            # Cast 回 features 的 dtype(fp16 训练下 features 是 half;现 P2 用
+            # fp32,此 cast 为 no-op,但保留以兼容未来 fp16)
             lidar_features = lidar_features.to(features.dtype)
 
             if self._fusion_mode == "sum":
-                # F1: simple sum (固定 50:50 fusion)
-                features = features + lidar_features
+                # F1: gated residual sum。lidar_gate 零初始化,训练初期 LiDAR
+                # 贡献=0,逐渐 ramp up(ReZero),避免新分支早期带飞主网络
+                features = features + self.lidar_gate.to(features.dtype) * lidar_features
             elif self._fusion_mode == "mafs":
-                # F2 MAFS: 每个 query 学自适应权重 (image vs lidar)
+                # F2 MAFS: 每个 query 学自适应权重 (image vs lidar)。softmax
+                # 加权已自带平衡(w_img+w_lid=1),lidar_features 已 LayerNorm,
+                # 无需额外 gate。
                 w_input = torch.cat(
                     [instance_feature, features, lidar_features], dim=-1
                 )
