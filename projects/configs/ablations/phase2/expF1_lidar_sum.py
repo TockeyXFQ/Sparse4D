@@ -218,6 +218,14 @@ data = dict(
 # 会自动跳过该 step + 降 scale,避免权重污染(但需重新验证 LiDAR 路径稳定性)。
 fp16 = None
 
+# ============ NaN 自动早停 ============
+# 一旦 loss 变 nan/inf 立即终止训练(P2 调试期多次因 NaN 没及时发现白烧多机
+# GPU)。patience=0 = 第一次 nan 就停。配合 model.debug_nan_source=True 可在
+# 崩盘瞬间定位是 image 还是 lidar 分支先坏。
+custom_hooks = [
+    dict(type="NaNStopHook", check_loss=True, check_grad=True, patience=0),
+]
+
 # Note: LiDAR backbone 显存比 image-only baseline 重 (+SparseEncoder ~7M params
 # + 大 BEV feature map),如果 OOM 把 samples_per_gpu 从 6 降到 4
 # data = dict(samples_per_gpu=4)

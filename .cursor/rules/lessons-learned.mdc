@@ -159,3 +159,42 @@ alwaysApply: true
      smoke 脚本末尾的自动断言:跑完 grep log.json,任何一行 loss=nan 就报错。
 - **触发**:用户拿 smoke "通过" 的代码去真训练,发现 loss 全程 NaN
 - **复发记录**:
+
+## #5 [2026-05-30] NaN 连续 3 次"修好"被证伪 — 靠推断改而非靠实测定位
+
+- **场景**:P2 LiDAR 融合训练反复 NaN,我连续给了 3 个"修复"
+- **错误**:
+  1. 第 1 次:NaN from iter 51 → 我推断"fp16 spconv 权重"→ 改 fp32。
+     实测证伪(fp32 后 NaN 推迟到 iter 5865,没根治)。
+  2. 第 2 次:iter 5865 渐进梯度爆炸(grad→2480)→ 推断"未归一化残差
+     分支"→ 加 LayerNorm+gate。**这次方向对**(渐进爆炸确实修好,grad
+     稳定),但我用 150-iter smoke 就说"验证通过",而崩盘点在 iter 5865,
+     smoke 范围内根本测不到 → 又是 #4 同类(验证范围不覆盖故障点)。
+  3. 第 3 次:有 LN 后 iter 3111 仍 NaN(但这次 grad 健康时突变,是
+     data-dependent 单点 NaN,跟前两次根因不同)。
+  共性:**我一直在"看现象→推断根因→改代码"循环,而没有第一时间加
+  instrumentation 去实测 NaN 到底从哪个 tensor 起源**。
+- **根因**:`过度自信`(把"机制上合理的修复"当成"已验证的修复")+
+  `跳过验证`(没在第一时间加 NaN-source 定位 hook,靠脑补分支)
+- **教训**(可执行):
+  1. **遇到 NaN/Inf,第一步不是猜根因,而是加 instrumentation 定位源头**:
+     - forward 各阶段加 `torch.isnan(x).any()` 检查,打印第一个变 NaN 的
+       tensor 名(image feat? lidar feat? 某 loss 项?)
+     - 或直接用 `torch.autograd.set_detect_anomaly(True)` 抓 backward NaN
+     - 定位到具体 tensor 后再谈修复,**禁止"现象→推断→改"跳过定位**
+  2. **训练类 NaN 修复的"验证"必须覆盖原故障点**:故障在 iter N,验证就
+     必须跑过 iter N(或在能复现的最小设置下复现 NaN 再确认消失)。
+     150-iter smoke 验证不了 iter 5865 的崩盘 —— 这种"验证"等于没验证。
+  3. **NaN 有多种独立根因,修好一种不等于修好全部**:渐进梯度爆炸(优化
+     不稳定,grad 飙升)vs 突发单点 NaN(脏数据/除零,grad 健康时突变)是
+     两类不同的病,要分别用不同手段(前者 norm/gate/降 lr,后者 nan_to_num
+     净化 + 定位脏数据)。看 grad 轨迹区分:渐进飙升 vs 健康突变。
+  4. **已知数值放大器(实测)**:`LayerNorm(含 inf 的输入) → 输出整向量
+     全 nan`(inf 参与 mean/var → inf-inf=nan 扩散)。任何 LN/BN 前的、
+     可能含 inf 的张量,先 `torch.nan_to_num` 净化。
+  5. **预防性工程**:训练脚本/config 默认挂 NaN 早停 hook(loss=nan 立即
+     终止),避免在崩坏模型上白烧 GPU(本次又白跑 ~800 iter 才发现)。
+     已实现 `NaNStopHook`(projects/mmdet3d_plugin/core/hook/)。
+- **触发**:用户连续贴 3 次 NaN 训练 log;第 3 次后我才转向"加定位 hook"
+  而非继续推断
+- **复发记录**:

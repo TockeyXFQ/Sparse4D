@@ -3,3 +3,4 @@ from .datasets import *
 from .models import *
 from .apis import *
 from .core.evaluation import *
+from .core.hook import *  # noqa: F401,F403 — 注册 NaNStopHook 等自定义 hook
