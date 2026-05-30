@@ -214,6 +214,11 @@ class DeformableFeatureAggregation(BaseModule):
         if self.lidar_bev_sampling and metas.get("lidar_bev") is not None:
             lidar_bev = metas["lidar_bev"]  # (B, C, H, W),来自 LiDAR backbone
             lidar_features = self._sample_lidar_bev(anchor, lidar_bev)
+            # 防御:净化 inf/nan,堵住 LayerNorm 把单个 inf 放大成整个向量 nan
+            # 的路径(已实测 LN(inf 输入)→ 全 nan)。正常数值不受影响。
+            lidar_features = torch.nan_to_num(
+                lidar_features, nan=0.0, posinf=0.0, neginf=0.0
+            )
             # proj -> LayerNorm 归一化(限制幅度,防无界增长 → 梯度爆炸)
             lidar_features = self.lidar_norm(self.lidar_proj(lidar_features))
             # Cast 回 features 的 dtype(fp16 训练下 features 是 half;现 P2 用

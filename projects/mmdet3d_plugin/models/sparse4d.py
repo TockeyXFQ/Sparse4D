@@ -272,6 +272,12 @@ class Sparse4D(BaseDetector):
         if self._has_lidar_branch and "points" in data:
             lidar_bev = self.extract_lidar_feat(data["points"])
 
+        # Phase 2 调试:崩盘时定位 NaN 来源(image vs lidar 分支)。开销极小
+        # (一次 isfinite reduce),只在 debug_nan_source=True 时启用。
+        if getattr(self, "debug_nan_source", False):
+            self._check_finite("image_feature_maps", feature_maps)
+            self._check_finite("lidar_bev", lidar_bev)
+
         # Phase 2 F4: masked-modal training (训练时按概率 zero-out 某模态)
         feature_maps, lidar_bev = self._apply_masked_modal(feature_maps, lidar_bev)
 
@@ -286,6 +292,25 @@ class Sparse4D(BaseDetector):
                 depths, data["gt_depth"]
             )
         return output
+
+    @staticmethod
+    def _check_finite(name, x):
+        """调试用:tensor / list[tensor] 出现 nan/inf 时打印来源 + 当前 sample。
+        只在 model.debug_nan_source=True 时被调用。"""
+        if x is None:
+            return
+        tensors = x if isinstance(x, (list, tuple)) else [x]
+        for i, t in enumerate(tensors):
+            if not torch.is_tensor(t):
+                continue
+            n_nan = torch.isnan(t).sum().item()
+            n_inf = torch.isinf(t).sum().item()
+            if n_nan or n_inf:
+                print(
+                    f"[NaN-DEBUG] {name}[{i}] has nan={n_nan} inf={n_inf} "
+                    f"shape={tuple(t.shape)}",
+                    flush=True,
+                )
 
     def forward_test(self, img, **data):
         if isinstance(img, list):
