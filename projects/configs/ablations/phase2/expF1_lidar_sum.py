@@ -19,6 +19,27 @@
 # ============================================================================
 _base_ = ["../../sparse4dv3_temporal_r50_1x8_bs6_256x704.py"]
 
+# ============ 跨集群数据路径(sh01 训练机没了,迁到 sh02)============
+# base config 用相对路径(anchor="nuscenes_kmeans900.npy" / anno_root=
+# "data/nuscenes_anno_pkls/" / pretrained="ckpt/resnet50-19c8e357.pth"),要求
+# 这些产物文件在训练工作目录根部。sh02 工作目录没有这些 → 启动 FileNotFoundError。
+#
+# 解法:用环境变量 SPARSE4D_DATA_ROOT 指向 sh01/sh02 共享盘
+# (/mnt/datasets/ad-lqy-oss/v1.0.0/,910T,两集群都可访问),里面已放:
+#   nuscenes_kmeans900.npy / resnet50-19c8e357.pth / nuscenes_anno_pkls/*.pkl
+# 默认值就是共享盘;不同环境可 export SPARSE4D_DATA_ROOT=... 覆盖。
+#
+# 注意:nuScenes 原始数据(samples/sweeps,pkl 里是相对路径 data/nuscenes/...)
+# 不走这里,需在训练工作目录建软链:
+#   ln -s /mnt/datasets/nuscenes/v1.0.0 data/nuscenes
+import os as _os
+_SHARED = _os.environ.get(
+    "SPARSE4D_DATA_ROOT", "/mnt/datasets/ad-lqy-oss/v1.0.0"
+)
+_anchor_path = f"{_SHARED}/nuscenes_kmeans900.npy"
+_r50_ckpt = f"{_SHARED}/resnet50-19c8e357.pth"
+_anno_root_abs = f"{_SHARED}/nuscenes_anno_pkls/"
+
 # ============ LiDAR 配置(全 P2 ablation 共享)============
 # nuScenes 标准 setting:point_cloud_range = [-54, -54, -5, 54, 54, 3]
 # voxel_size = [0.075, 0.075, 0.2] → BEV grid = 1440 × 1440 × 41
@@ -70,10 +91,14 @@ model = dict(
         upsample_cfg=dict(type="deconv", bias=False),
         use_conv_for_no_stride=True,
     ),
+    # 跨集群:R50 预训练权重指向共享盘绝对路径(base 用相对 ckpt/...)
+    img_backbone=dict(pretrained=_r50_ckpt),
     # F1 不开 masked_modal_prob(此处不写,model 默认 None;
     # F_full config 在 child 里加 dict 才不会触发 mmcv None→dict 类型冲突)
     # ---- DFA 加 LiDAR BEV sampling (F1 sum fusion) ----
     head=dict(
+        # 跨集群:anchor 指向共享盘绝对路径(base 用相对 nuscenes_kmeans900.npy)
+        instance_bank=dict(anchor=_anchor_path),
         deformable_model=dict(
             lidar_bev_sampling=dict(
                 point_cloud_range=point_cloud_range,
@@ -183,18 +208,24 @@ input_modality = dict(
     use_external=False,
 )
 
+# ann_file 指向共享盘 pkl 绝对路径(base 用相对 data/nuscenes_anno_pkls/...)。
+# pkl 内部的 cam/lidar 路径仍是相对 data/nuscenes/...,所以**工作目录必须有
+# 软链 data/nuscenes -> /mnt/datasets/nuscenes/v1.0.0**(见 config 顶部说明)。
 data = dict(
     train=dict(
         modality=input_modality,
         pipeline=train_pipeline,
+        ann_file=_anno_root_abs + "nuscenes_infos_train.pkl",
     ),
     val=dict(
         modality=input_modality,
         pipeline=test_pipeline,
+        ann_file=_anno_root_abs + "nuscenes_infos_val.pkl",
     ),
     test=dict(
         modality=input_modality,
         pipeline=test_pipeline,
+        ann_file=_anno_root_abs + "nuscenes_infos_val.pkl",
     ),
 )
 
