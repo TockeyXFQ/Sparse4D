@@ -68,8 +68,13 @@ class Sparse4D(BaseDetector):
         pts_neck: Optional[dict] = None,
         # ---- Phase 2 F4: masked-modal training (可选) ----
         masked_modal_prob: Optional[dict] = None,
+        # ---- Phase 2 调试:崩盘时打印 NaN 来源(image vs lidar 分支) ----
+        # 默认 False(零开销);定位 NaN 时 config 里设 True,或启动命令加
+        # --cfg-options model.debug_nan_source=True
+        debug_nan_source: bool = False,
     ):
         super(Sparse4D, self).__init__(init_cfg=init_cfg)
+        self.debug_nan_source = debug_nan_source
         if pretrained is not None:
             backbone.pretrained = pretrained
         self.img_backbone = build_backbone(img_backbone)
@@ -274,7 +279,7 @@ class Sparse4D(BaseDetector):
 
         # Phase 2 调试:崩盘时定位 NaN 来源(image vs lidar 分支)。开销极小
         # (一次 isfinite reduce),只在 debug_nan_source=True 时启用。
-        if getattr(self, "debug_nan_source", False):
+        if self.debug_nan_source:
             self._check_finite("image_feature_maps", feature_maps)
             self._check_finite("lidar_bev", lidar_bev)
 
