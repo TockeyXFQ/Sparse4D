@@ -124,7 +124,7 @@ mkdir -p "${WORK_DIR}"
 LR_SCALING=${LR_SCALING:-sqrt}
 BASELINE_GPUS=${BASELINE_GPUS:-8}
 
-EXTRA_OPTS=()
+_AUTO_CFG_KV=()   # 脚本自动算的 cfg-options key=value(不带 --cfg-options 前缀)
 LR_INFO=""
 ITER_INFO=""
 
@@ -186,8 +186,11 @@ if [ -n "${SCALED_RESULT}" ]; then
             BASELINE_CKPT_INTERVAL SCALED_CKPT_INTERVAL \
             NUM_EPOCHS <<< "${SCALED_RESULT}"
 
+    # _AUTO_CFG_KV:脚本自动算的 cfg-options key=value(纯 key,不带
+    # --cfg-options 前缀)。最后跟用户传入的 cfg-options 合并成**单个**
+    # --cfg-options(避免出现两个 --cfg-options 导致 argparse 冲突/截断)。
     if [ "${LR_SCALING}" != "none" ] && [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
-        EXTRA_OPTS+=("--cfg-options" "optimizer.lr=${SCALED_LR}")
+        _AUTO_CFG_KV+=("optimizer.lr=${SCALED_LR}")
         LR_INFO="${LR_SCALING}: lr ${BASELINE_LR} × ${FACTOR} = ${SCALED_LR} (${SCALE_RATIO}×)"
     else
         LR_INFO="not scaling (TOTAL_GPUS=${TOTAL_GPUS} == BASELINE_GPUS=${BASELINE_GPUS}, or LR_SCALING=none)"
@@ -195,7 +198,7 @@ if [ -n "${SCALED_RESULT}" ]; then
 
     # iter 数永远 scale(不管 LR_SCALING 设置),否则多机会过训 N×
     if [ "${TOTAL_GPUS}" != "${BASELINE_GPUS}" ]; then
-        EXTRA_OPTS+=(
+        _AUTO_CFG_KV+=(
             "runner.max_iters=${SCALED_MAX_ITERS}"
             "evaluation.interval=${SCALED_EVAL_INTERVAL}"
             "checkpoint_config.interval=${SCALED_CKPT_INTERVAL}"
@@ -207,6 +210,45 @@ if [ -n "${SCALED_RESULT}" ]; then
 else
     LR_INFO="WARN: failed to parse ${CONFIG}, NOT auto-scaling lr / iter"
     ITER_INFO=""
+fi
+
+# ----- 合并 用户传入的 args 与 脚本自动算的 cfg-options -----
+# 从 "$@" 里分离出用户的 --cfg-options key=value(可能没有),其余 arg 原样保留。
+# 然后把 用户 cfg key + _AUTO_CFG_KV 合并成单个 --cfg-options,杜绝两个
+# --cfg-options 并存导致 argparse 报 "unrecognized arguments"。
+_USER_ARGS=()        # 非 cfg-options 的用户 arg
+_USER_CFG_KV=()      # 用户 --cfg-options 后的 key=value
+_in_cfg=0
+for _a in "$@"; do
+    if [ "${_a}" = "--cfg-options" ]; then
+        _in_cfg=1
+        continue
+    fi
+    if [ "${_in_cfg}" = "1" ]; then
+        # cfg-options 后续 token:形如 key=value 的归 cfg;遇到下一个 --xxx 则结束
+        case "${_a}" in
+            --*) _in_cfg=0; _USER_ARGS+=("${_a}") ;;
+            *=*) _USER_CFG_KV+=("${_a}") ;;
+            *) _in_cfg=0; _USER_ARGS+=("${_a}") ;;
+        esac
+    else
+        _USER_ARGS+=("${_a}")
+    fi
+done
+
+# 拼最终 cfg-options(脚本自动 + 用户,单个 --cfg-options)。
+# 用 ${arr[@]+"${arr[@]}"} 保护空数组展开(set -u 下空数组直接 "${arr[@]}" 会报错)。
+_FINAL_CFG=()
+if [ ${#_AUTO_CFG_KV[@]} -gt 0 ] || [ ${#_USER_CFG_KV[@]} -gt 0 ]; then
+    _FINAL_CFG=(
+        "--cfg-options"
+        ${_AUTO_CFG_KV[@]+"${_AUTO_CFG_KV[@]}"}
+        ${_USER_CFG_KV[@]+"${_USER_CFG_KV[@]}"}
+    )
+fi
+CFG_INFO="(none)"
+if [ ${#_FINAL_CFG[@]} -gt 0 ]; then
+    CFG_INFO="${_FINAL_CFG[*]}"
 fi
 
 # ----- 启动信息 -----
@@ -227,6 +269,7 @@ echo "  AUTO LR-SCALING = ${LR_INFO}"
 if [ -n "${ITER_INFO}" ]; then
     echo "  AUTO ITER-SCALE = ${ITER_INFO}"
 fi
+echo "  CFG-OPTIONS     = ${CFG_INFO}"
 echo "================================================================="
 
 # ----- 启动 torchrun(替代 deprecated 的 torch.distributed.launch)-----
@@ -242,6 +285,6 @@ torchrun \
     "${CONFIG}" \
     --launcher pytorch \
     --work-dir "${WORK_DIR}" \
-    "${EXTRA_OPTS[@]}" \
-    "$@" \
+    ${_USER_ARGS[@]+"${_USER_ARGS[@]}"} \
+    ${_FINAL_CFG[@]+"${_FINAL_CFG[@]}"} \
     2>&1 | tee -a "${WORK_DIR}/train.log"
