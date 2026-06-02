@@ -20,3 +20,11 @@ _base_ = ["./expF1_F2_mafs.py"]
 model = dict(
     masked_modal_prob=dict(image=0.3, lidar=0.3),
 )
+
+# F4 masked-modal 必需:某个模态被随机 zero-out 的 step,该模态融合分支
+# (lidar_proj / lidar_gate / mafs_mlp 等)不参与 loss → 无梯度。DDP 默认
+# find_unused_parameters=False 会报 "Expected to have finished reduction ...
+# parameters that were not used in producing loss"。开 True 让 DDP 每步动态
+# 检测未用参数(性能略降 ~5-10%,但 masking 训练必须)。
+# 注意:不能配 static_graph=True(masking 每步参与的参数集会变,与静态图冲突)。
+find_unused_parameters = True

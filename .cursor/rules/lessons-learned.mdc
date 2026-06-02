@@ -198,3 +198,71 @@ alwaysApply: true
 - **触发**:用户连续贴 3 次 NaN 训练 log;第 3 次后我才转向"加定位 hook"
   而非继续推断
 - **复发记录**:
+
+## #6 [2026-06-01] 给用户的命令手动重复传脚本已自动算的参数,且两个 --cfg-options 冲突导致 argparse 报错
+
+- **场景**:F2(MAFS)6 机 48 卡训练,我给用户的启动命令在 `05_train_multinode.sh`
+  后面手动追加了 `--cfg-options model.debug_nan_source=True runner.max_iters=9766
+  evaluation.interval=1953 checkpoint_config.interval=1953`
+- **错误**:
+  1. **重复传**:`05_train_multinode.sh` **本身就会**根据 TOTAL_GPUS 自动 scale
+     `runner.max_iters / evaluation.interval / checkpoint_config.interval`(log
+     banner 明确打印 `AUTO ITER-SCALE = max_iters 58600→9766`)。我却又在命令行
+     手动传了一遍同样的值 —— 完全多余,说明我**没读自己写的脚本逻辑**就给命令。
+  2. **argparse 冲突(致命)**:脚本内部把自动算的参数拼成
+     `--cfg-options runner.max_iters=...`,用户命令行又传了
+     `--cfg-options model.debug_nan_source=True runner.max_iters=...`,
+     于是 train.py 收到**两个 `--cfg-options`**。argparse 里 `--cfg-options`
+     是 `nargs='+'`,第二个出现时,脱离它的那些裸 `key=value`(如
+     `runner.max_iters=9766`)被当成**位置参数**,直接报
+     `error: unrecognized arguments: runner.max_iters=9766 ...`,6 机训练
+     启动即崩,白白占用集群调度 + 浪费用户一次启动往返。
+- **根因**:
+  1. `没读自己的代码`:给"配套命令"前没回看脚本已经做了哪些自动化,凭记忆
+     给命令 → 重复 + 冲突。
+  2. `不懂 argparse nargs='+' 的多次出现语义`:误以为多个 `--cfg-options`
+     会自动合并,实际后者覆盖/前者裸 key 失配。
+- **教训**(可执行):
+  1. **给"配套启动命令"前,先回读脚本最终拼给底层程序的参数**(本例是
+     torchrun→train.py 那几行),确认脚本已自动做的事,**命令行绝不重复传**。
+     宣称"脚本全自动"就不该再手动补它已经算好的字段。
+  2. **同一个 `nargs='+'` 的 argparse 选项(如 `--cfg-options`)在一条命令里
+     只能出现一次**。脚本若自己注入了 `--cfg-options`,必须把用户传入的
+     cfg key **merge 进同一个 `--cfg-options`**,而不是各拼各的。本次已重构
+     `05_train_multinode.sh`:解析 `"$@"` 分离出用户 cfg key,与脚本自动算的
+     key 合并成**单个** `--cfg-options`(并在 banner 打印 `CFG-OPTIONS=` 供核对)。
+  3. **写"参数透传"的 wrapper 脚本时,默认用户可能传与脚本同名的选项**,
+     要么 merge、要么显式禁止,不能放任两个同名 `nargs='+'` 选项并存。
+- **触发**:用户贴 `logs-2026-06-01T02-20-06.log` 报错(`unrecognized arguments`)
+- **复发记录**:
+
+## #7 [2026-06-02] 实现 masked-modal 训练却漏配 find_unused_parameters,F_full 多机一启动就崩
+
+- **场景**:P2 F_full = F1+F2+F4,F4 masked-modal 训练(随机 zero-out 某个模态
+  feature)。8 卡多机一启动第一个 backward 就报
+  `RuntimeError: Expected to have finished reduction in the prior iteration ...
+  parameters that were not used in producing loss`(rank7: `did not receive
+  grad: 173 174`)。
+- **错误**:我实现 masked-modal(`_apply_masked_modal` 随机置零模态)时,**只改了
+  模型 forward,没同步改 DDP 配置**。模态被丢弃的 step,该模态融合分支参数
+  (lidar_proj/lidar_gate/mafs_mlp 等)不参与 loss → 无梯度,而 mmdet_train.py
+  读 `cfg.get("find_unused_parameters", False)` 默认 False → DDP 直接崩。
+  F1/F2 没 masking 所以没暴露,直到 F_full 才炸。
+- **根因**:`没系统列清单`——引入"条件性参与的子网络/分支"(masking、MoE、
+  动态路由、辅助头按概率开启等)时,只想到 forward 逻辑,忘了它必然改变
+  "每步参与 loss 的参数集",而这直接影响 DDP 的 find_unused_parameters。
+- **教训**(可执行):
+  1. **任何"按概率/条件跳过某分支"的训练技巧(masked-modal / stochastic
+     depth / 辅助头随机开关 / MoE),实现时必须同时检查 DDP 配置**:多机下
+     这类技巧几乎总是需要 `find_unused_parameters=True`(顶层 cfg key)。
+  2. **且不能配 `static_graph=True`**:静态图假设每步参与的参数集固定,与
+     "条件跳过"冲突,会更隐蔽地崩或 hang。
+  3. **代价意识**:`find_unused_parameters=True` 让 DDP 每步动态扫描未用参数,
+     性能降 ~5-10%。所以**只在需要的 config(F_full)开,不要全局开**(F1/F2
+     保持 False 跑得更快)。
+  4. **预防**:写"条件参与"类模块时,在该模块/ config 旁边留 inline 注释提醒
+     "本技巧需 find_unused_parameters=True",并在对应 ablation config 直接配好,
+     不要等多机训练崩了才补(本次又白排队一次集群调度)。
+- **触发**:用户在 sh02 用 `expF_full.py` 启动 8 卡训练,贴
+  `logs-2026-06-02T01-54-58.log` 报 DDP unused-parameter 错
+- **复发记录**:
