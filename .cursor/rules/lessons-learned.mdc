@@ -266,3 +266,42 @@ alwaysApply: true
 - **触发**:用户在 sh02 用 `expF_full.py` 启动 8 卡训练,贴
   `logs-2026-06-02T01-54-58.log` 报 DDP unused-parameter 错
 - **复发记录**:
+
+## #8 [2026-06-02] 开 find_unused_parameters=True 没检查它与梯度检查点(reentrant)的冲突,F_full 又崩
+
+- **场景**:#7 给 F_full 加了 `find_unused_parameters=True` 修 masked-modal 的
+  DDP unused-parameter 报错。改完用户重跑,第一个 backward(iter 0)又崩。
+- **错误**:加 `find_unused_parameters=True` 时,**没检查它与已有的
+  `img_backbone with_cp=True`(梯度检查点)是否兼容**。报错:
+  ```
+  RuntimeError: Expected to mark a variable ready only once
+  Parameter at index 157 (img_backbone.layer4.2.bn3.weight) marked ready twice
+  ```
+  根因:mmdet `ResNet(with_cp=True)` 用 `torch.utils.checkpoint.checkpoint(fn,x)`
+  未传 `use_reentrant`,torch<2.4 默认**重入**模式 → backward 里重跑 forward →
+  把 DDP 给每个参数挂的 autograd hook 再触发一遍 → 同一参数被标 ready 两次。
+  **`find_unused_parameters=False` 时不会触发(F1/F2 因此没事),只有同时
+  开 `=True` 才暴露**。错误信息建议的 `static_graph` 又因 masking 不可用(#7)。
+- **根因**:`没系统列清单`——改 DDP 配置(尤其打开 find_unused_parameters)时,
+  没回头排查"当前模型里还有哪些和 DDP 交互的特性(梯度检查点 / 共享参数 /
+  多次 forward)会与这个开关冲突"。把 #7 当成"加一行就完事",没看全局。
+- **教训**(可执行):
+  1. **打开 `find_unused_parameters=True` 时,必须同时检查模型是否用了梯度
+     检查点(`with_cp=True` / `torch.utils.checkpoint`)**。二者 + 默认重入
+     模式在 DDP 下必崩("marked ready twice")。解法:把检查点切成
+     **非重入** `use_reentrant=False`(torch 官方推荐,兼容 find_unused,
+     且同样省显存),**不是** static_graph(与 masking 冲突)。
+  2. 本仓库 mmdet `ResNet` 内部 hardcode 重入调用,改不了 config,已在
+     `projects/mmdet3d_plugin/compat.py` 加 Patch 3:monkeypatch
+     `torch.utils.checkpoint.checkpoint`,调用方未显式传 `use_reentrant` 时
+     默认 False。import plugin 即生效,F1/F2/F_full 都受益(省显存)。
+  3. **判别口诀**:DDP 报 `Expected to have finished reduction ... parameters
+     not used` → 缺 `find_unused_parameters=True`;DDP 报 `Expected to mark a
+     variable ready only once / marked ready twice` → 梯度检查点重入与
+     find_unused 冲突,改 `use_reentrant=False`。两个错长得像但根因相反,别搞混。
+  4. **改 DDP 开关属于"全局副作用"改动**:每次都要问"模型里还有哪些和 DDP
+     梯度归约交互的机制"(检查点 / 参数共享 / 多次 forward / 条件分支),
+     逐个核对兼容性,别只盯着触发当前报错的那一个点。
+- **触发**:用户用 `expF_full.py` 启动 8 卡训练,贴
+  `logs-2026-06-02T02-17-11.log` 报 `marked ready twice`(#7 修复的连锁副作用)
+- **复发记录**:

@@ -15,6 +15,18 @@ Patch 2: numpy 1.x 的 np.unique 对 NaN 的处理
     numpy 1.x 的 `np.unique` 会把所有 NaN 合并成 1 个,但 numpy 2.0+ 保留全部。
     nuscenes-devkit 的逻辑假定了 numpy 2.0 行为,所以在 numpy 1.x 下只要 thresholds 含 NaN
     必然 assert 失败。我们在 `algo` 模块内把 `np.unique` 替换成保留所有 NaN 的版本。
+
+Patch 3: gradient checkpointing 默认走非重入(use_reentrant=False)
+    mmdet 的 `ResNet(with_cp=True)` 内部用 `torch.utils.checkpoint.checkpoint(fn, x)`,
+    未显式传 `use_reentrant`,torch<2.4 默认 reentrant(重入)模式。重入式 checkpoint 会在
+    backward 阶段重跑 forward,把 autograd hook 再触发一遍。当 DDP 配置
+    `find_unused_parameters=True` 时(F4 masked-modal 必须开),这会让同一个参数被 DDP
+    标记 ready 两次,第一个 backward 就崩:
+        RuntimeError: Expected to mark a variable ready only once
+        Parameter at index 157 (img_backbone.layer4.2.bn3.weight) marked ready twice
+    static_graph 不可用(masking 每步参与的参数集会变)。torch 官方推荐的解法是把检查点
+    切成非重入(use_reentrant=False),它专门兼容 find_unused_parameters=True,且同样省显存。
+    本 patch 在调用方未显式指定 use_reentrant 时,把默认值改成 False。
 """
 
 from __future__ import annotations
@@ -174,5 +186,36 @@ def _apply_nuscenes_tracking_nan_unique_patch() -> None:
     )
 
 
+def _apply_nonreentrant_checkpoint_patch() -> None:
+    """把 torch.utils.checkpoint.checkpoint 默认改成非重入(use_reentrant=False)。
+
+    仅当调用方未显式传 `use_reentrant` 时才注入 False;显式传入的(无论 True/False)
+    一律尊重原意。幂等:重复 import 不会二次包装。
+    """
+    try:
+        import torch.utils.checkpoint as _cp
+    except ImportError:
+        logger.debug("torch not installed; skip checkpoint patch.")
+        return
+
+    if getattr(_cp, "_sparse4d_nonreentrant_patched", False):
+        return
+
+    _orig_checkpoint = _cp.checkpoint
+
+    def _patched_checkpoint(*args, **kwargs):
+        if "use_reentrant" not in kwargs:
+            kwargs["use_reentrant"] = False
+        return _orig_checkpoint(*args, **kwargs)
+
+    _cp.checkpoint = _patched_checkpoint
+    _cp._sparse4d_nonreentrant_patched = True
+    logger.info(
+        "Patched torch.utils.checkpoint.checkpoint: use_reentrant now defaults to "
+        "False (non-reentrant), compatible with DDP find_unused_parameters=True."
+    )
+
+
 _apply_nuscenes_tracking_pandas2_patch()
 _apply_nuscenes_tracking_nan_unique_patch()
+_apply_nonreentrant_checkpoint_patch()
