@@ -264,7 +264,14 @@ class LoadPointsFromMultiSweepsSparse4D(object):
             points[:, self.time_dim] = 0.0
 
         sweep_points_list = [points]
-        ts_cur = results["timestamp"] / 1e6  # nuScenes timestamp 是 microseconds
+        # 单位约定(踩过坑,务必注意):NuScenes3DDetTrackDataset.get_data_info
+        # 已经把 sample 的 timestamp 除以 1e6 转成"秒"(见 dataset 的
+        # `timestamp=info["timestamp"] / 1e6`),所以这里**不能再除 1e6**。
+        # sweep["timestamp"](下面 ts_sweep)才是 pkl 原始的微秒,需要各自 /1e6。
+        # 旧 bug:这里多除了一次 → ts_cur≈1531 而 ts_sweep≈1.5e9,相减无法抵消
+        # 绝对时间戳,导致 time_dim 被写入 ~1.5e9 的天文数字,撑爆 LiDAR
+        # SparseEncoder 第一个 BN(running_var→1e17),训练 NaN / lidar-only 崩溃。
+        ts_cur = results["timestamp"]  # 已是秒,不要再 /1e6
 
         sweeps = results.get("sweeps", [])
 
