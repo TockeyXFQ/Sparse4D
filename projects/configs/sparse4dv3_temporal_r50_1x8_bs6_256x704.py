@@ -475,5 +475,12 @@ vis_pipeline = [
 evaluation = dict(
     interval=num_iters_per_epoch * checkpoint_epoch_interval,
     pipeline=vis_pipeline,
+    # 多机训练用 NCCL allgather 收 eval 结果,不依赖 work_dir 跨节点共享。
+    # 默认 cpu collect 把每 rank 的 outputs dump 成 .eval_hook/part_<rank>.pkl
+    # 由 rank 0 读合并;若 work_dir 是节点本地盘(平台常见情况),rank 0 看不到
+    # 其他节点的 part 文件,直接 FileNotFoundError(单机 8 卡同节点不会暴露)。
+    # gpu_collect=True 走 GPU 间 allgather,任何 work_dir 都能跑;代价是 GPU
+    # 显存多占 outputs × world_size 一份(6019 帧 × 32 卡 H20 实测可扛)。
+    gpu_collect=True,
     # out_dir="./vis",  # for visualization
 )

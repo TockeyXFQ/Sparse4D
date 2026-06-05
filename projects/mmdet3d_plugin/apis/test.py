@@ -168,4 +168,43 @@ def collect_results_cpu(result_part, size, tmpdir=None):
 
 
 def collect_results_gpu(result_part, size):
-    collect_results_cpu(result_part, size)
+    """用 NCCL allgather 跨节点收集 eval 结果(不依赖共享文件系统)。
+
+    背景:旧版本是个 stub `collect_results_cpu(result_part, size)`,实际走
+    cpu collect 路径,要求 work_dir/.eval_hook 是跨节点共享盘。多机训练
+    work_dir 在节点本地盘时,rank 0 看不到 rank>=N_per_node 写的 part 文件
+    → FileNotFoundError(part_8.pkl)。本实现走 GPU allgather,无此问题。
+
+    Args:
+        result_part: 当前 rank 的 outputs(list of dict / 任意 picklable 对象)
+        size: 整个 dataset 的样本数(用于裁掉 dataloader 的 padding)
+    Returns:
+        rank 0: 合并后的 ordered_results;其他 rank: None
+    """
+    rank, world_size = get_dist_info()
+    # 1) 序列化为 byte tensor(放 GPU,因为 NCCL 只能跑 GPU tensor)
+    part_tensor = torch.tensor(
+        bytearray(pickle.dumps(result_part)), dtype=torch.uint8, device="cuda"
+    )
+    # 2) 先 allgather 各 rank 的字节长度(allgather 要求 shape 一致,所以先对齐)
+    shape_tensor = torch.tensor([part_tensor.shape[0]], device="cuda")
+    shape_list = [shape_tensor.clone() for _ in range(world_size)]
+    dist.all_gather(shape_list, shape_tensor)
+    # 3) pad 当前 rank 到最大长度,然后 allgather 真实数据
+    shape_max = torch.cat(shape_list).max()
+    part_send = torch.zeros(shape_max, dtype=torch.uint8, device="cuda")
+    part_send[: shape_tensor.item()] = part_tensor
+    part_recv_list = [part_tensor.new_zeros(shape_max) for _ in range(world_size)]
+    dist.all_gather(part_recv_list, part_send)
+    # 4) rank 0 反序列化 + 按 rank 顺序合并(每 rank 的 outputs 在内部已是该
+    # rank 的连续样本顺序,见 collect_results_cpu 注释里说的 sampler 行为)
+    if rank != 0:
+        return None
+    part_list = []
+    for recv, shape in zip(part_recv_list, shape_list):
+        part_bytes = recv[: shape.item()].cpu().numpy().tobytes()
+        part_list.append(pickle.loads(part_bytes))
+    ordered_results = []
+    for res in part_list:
+        ordered_results.extend(list(res))
+    return ordered_results[:size]
