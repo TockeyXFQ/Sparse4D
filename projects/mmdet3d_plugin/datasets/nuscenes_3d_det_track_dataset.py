@@ -1,6 +1,7 @@
 import random
 import math
 import os
+import re
 from os import path as osp
 import cv2
 import tempfile
@@ -271,13 +272,39 @@ class NuScenes3DDetTrackDataset(Dataset):
         print(self.metadata)
         return data_infos
 
+    def _resolve_path(self, p):
+        """把 pkl 里存的相对路径解析成可用的绝对/相对路径,供下游 transform 使用。
+
+        pkl 里的路径(lidar_path / cam_info['data_path'] / sweeps[*]['data_path'])
+        是 hardcode 的相对路径(`data/nuscenes/samples/...` / `data/nuscenes/sweeps/...`),
+        要求工作目录有软链 `data/nuscenes -> /mnt/datasets/nuscenes/v1.0.0`。在只能
+        git clone 的训练平台上 cwd 没法建软链,直接 FileNotFoundError。
+
+        本方法把 pkl 里的相对路径用 `self.data_root` 重新拼接:
+        - 已是绝对路径(以 `/` 开头)→ 原样返回
+        - 含 `data/nuscenes/` 前缀 → strip 后用 data_root 拼(去重前缀,避免重复)
+        - 其他纯子路径 → 直接用 data_root 拼
+
+        所以只要 config 把 `data_root` 设成绝对路径(如
+        `/mnt/datasets/nuscenes/v1.0.0/`),所有相对路径自动转绝对,**无需 cwd 软链**;
+        若 `data_root` 仍是相对(如 `data/nuscenes/`),行为等价旧版,向后兼容。
+        """
+        if osp.isabs(p):
+            return p
+        # 兼容 `./data/nuscenes/...` 和 `data/nuscenes/...` 两种 pkl 写法
+        p = re.sub(r"^(\./)?data/nuscenes/", "", p)
+        return osp.join(self.data_root, p)
+
     def get_data_info(self, index):
         info = self.data_infos[index]
         # standard protocol modified from SECOND.Pytorch
         input_dict = dict(
             sample_idx=info["token"],
-            pts_filename=info["lidar_path"],
-            sweeps=info["sweeps"],
+            pts_filename=self._resolve_path(info["lidar_path"]),
+            sweeps=[
+                {**sw, "data_path": self._resolve_path(sw["data_path"])}
+                for sw in info["sweeps"]
+            ],
             timestamp=info["timestamp"] / 1e6,
             lidar2ego_translation=info["lidar2ego_translation"],
             lidar2ego_rotation=info["lidar2ego_rotation"],
@@ -301,7 +328,7 @@ class NuScenes3DDetTrackDataset(Dataset):
             lidar2img_rts = []
             cam_intrinsic = []
             for cam_type, cam_info in info["cams"].items():
-                image_paths.append(cam_info["data_path"])
+                image_paths.append(self._resolve_path(cam_info["data_path"]))
                 # obtain lidar to image transformation matrix
                 lidar2cam_r = np.linalg.inv(cam_info["sensor2lidar_rotation"])
                 lidar2cam_t = (

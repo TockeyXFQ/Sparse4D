@@ -52,6 +52,28 @@ FRAG    628
 TID 1.37
 LGD 1.89
 """
+import os as _os
+
+# ============ 数据/权重根路径(改成绝对路径,脱离 cwd 软链)============
+# 历史:base config 里 4 处用相对路径(`data/nuscenes/`、`data/nuscenes_anno_pkls/`、
+# `nuscenes_kmeans900.npy`、`ckpt/resnet50-19c8e357.pth`),要求 cwd 有
+# `data/nuscenes` 软链。在只能 git clone 的训练平台上 cwd 没法建软链,
+# FileNotFoundError 直接崩。
+# 现:默认指向集群挂载的绝对路径,通过环境变量 override 兼容其他挂载位置:
+#   SPARSE4D_NUSC_ROOT  — 原始 nuScenes(samples/sweeps/maps),默认
+#                          /mnt/datasets/nuscenes/v1.0.0
+#   SPARSE4D_DATA_ROOT  — pkl/anchor/R50 ckpt 共享盘,默认
+#                          /mnt/datasets/ad-lqy-oss/v1.0.0
+# 配合 dataset.NuScenes3DDetTrackDataset._resolve_path:pkl 里的相对路径
+# (data/nuscenes/...)会被 strip 前缀后用 self.data_root 重新拼成绝对路径,
+# 因此**所有下游 LoadMultiViewImageFromFiles / LoadPointsFromFile/MultiSweeps
+# 拿到的就是绝对路径**,无需 cwd 软链。
+_NUSC_ROOT = _os.environ.get(
+    "SPARSE4D_NUSC_ROOT", "/mnt/datasets/nuscenes/v1.0.0"
+).rstrip("/") + "/"
+_DATA_ROOT = _os.environ.get(
+    "SPARSE4D_DATA_ROOT", "/mnt/datasets/ad-lqy-oss/v1.0.0"
+).rstrip("/") + "/"
 
 # ================ base config ===================
 plugin = True
@@ -67,7 +89,7 @@ num_iters_per_epoch = int(28130 // (num_gpus * batch_size))
 num_epochs = 100
 checkpoint_epoch_interval = 20
 
-checkpoint_config = dict(
+checkpoint_config = dict( 
     interval=num_iters_per_epoch * checkpoint_epoch_interval
 )
 log_config = dict(
@@ -128,7 +150,7 @@ model = dict(
         with_cp=True,
         out_indices=(0, 1, 2, 3),
         norm_cfg=dict(type="BN", requires_grad=True),
-        pretrained="ckpt/resnet50-19c8e357.pth",
+        pretrained=_DATA_ROOT + "resnet50-19c8e357.pth",
     ),
     img_neck=dict(
         type="FPN",
@@ -153,7 +175,7 @@ model = dict(
             type="InstanceBank",
             num_anchor=900,
             embed_dims=embed_dims,
-            anchor="nuscenes_kmeans900.npy",
+            anchor=_DATA_ROOT + "nuscenes_kmeans900.npy",
             anchor_handler=dict(type="SparseBox3DKeyPointsGenerator"),
             num_temp_instances=600 if temporal else -1,
             confidence_decay=0.6,
@@ -294,9 +316,9 @@ model = dict(
 
 # ================== data ========================
 dataset_type = "NuScenes3DDetTrackDataset"
-data_root = "data/nuscenes/"
-anno_root = "data/nuscenes_cam/"
-anno_root = "data/nuscenes_anno_pkls/"
+data_root = _NUSC_ROOT
+anno_root = _DATA_ROOT + "nuscenes_cam/"
+anno_root = _DATA_ROOT + "nuscenes_anno_pkls/"
 file_client_args = dict(backend="disk")
 
 img_norm_cfg = dict(
