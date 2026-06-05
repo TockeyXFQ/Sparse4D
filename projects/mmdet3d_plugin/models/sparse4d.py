@@ -68,6 +68,12 @@ class Sparse4D(BaseDetector):
         pts_neck: Optional[dict] = None,
         # ---- Phase 2 F4: masked-modal training (可选) ----
         masked_modal_prob: Optional[dict] = None,
+        # ---- Phase 2 G1/G2: 推理期强制单模态(robustness 评测用) ----
+        # None       : 默认双模态推理 (cam+lidar)
+        # 'camera'   : G1 cam-only 推理 (zero-out LiDAR,对标 DualViewDistill)
+        # 'lidar'    : G2 lidar-only 推理 (zero-out image,对标 CenterPoint)
+        # 通过 --cfg-options model.eval_force_modal=camera/lidar 切换,无需重训。
+        eval_force_modal: Optional[str] = None,
         # ---- Phase 2 调试:崩盘时打印 NaN 来源(image vs lidar 分支) ----
         # 默认 False(零开销);定位 NaN 时 config 里设 True,或启动命令加
         # --cfg-options model.debug_nan_source=True
@@ -75,6 +81,10 @@ class Sparse4D(BaseDetector):
     ):
         super(Sparse4D, self).__init__(init_cfg=init_cfg)
         self.debug_nan_source = debug_nan_source
+        assert eval_force_modal in (None, "camera", "lidar"), (
+            f"eval_force_modal must be None/'camera'/'lidar', got {eval_force_modal}"
+        )
+        self.eval_force_modal = eval_force_modal
         if pretrained is not None:
             backbone.pretrained = pretrained
         self.img_backbone = build_backbone(img_backbone)
@@ -327,8 +337,24 @@ class Sparse4D(BaseDetector):
         feature_maps = self.extract_feat(img)
 
         # Phase 2 F1: LiDAR BEV feature (eval 时也用,默认双模态推理)
+        lidar_bev = None
         if self._has_lidar_branch and "points" in data:
             lidar_bev = self.extract_lidar_feat(data["points"])
+
+        # Phase 2 G1/G2: 推理期强制单模态。zero-out 方式与训练 masked-modal
+        # (_apply_masked_modal)严格一致,保证推理分布和训练所见一致。
+        if self.eval_force_modal == "camera":
+            # 丢 LiDAR -> lidar_bev 置零(仍喂给 head,与训练 lidar-dropped 一致)
+            if lidar_bev is not None:
+                lidar_bev = torch.zeros_like(lidar_bev)
+        elif self.eval_force_modal == "lidar":
+            # 丢 image -> feature_maps 整体置零(spatial_shape 归零 = 图像采样为空)
+            if isinstance(feature_maps, (list, tuple)):
+                feature_maps = [torch.zeros_like(x) for x in feature_maps]
+            else:
+                feature_maps = torch.zeros_like(feature_maps)
+
+        if lidar_bev is not None:
             data["lidar_bev"] = lidar_bev
 
         model_outs = self.head(feature_maps, data)
