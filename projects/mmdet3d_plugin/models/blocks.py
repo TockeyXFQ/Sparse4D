@@ -125,6 +125,15 @@ class DeformableFeatureAggregation(BaseModule):
                 f"fusion_mode must be 'sum' (F1) or 'mafs' (F2), "
                 f"got {self._fusion_mode}"
             )
+            # F1.kp(本次实验):是否复用图像分支的 key_points 做 LiDAR BEV 多点
+            # 采样。False(默认) = 旧行为,仅在 anchor 中心采 1 点;True = 在
+            # 同一组 num_pts 个 key_points 处各采 1 点然后 mean pool 成单向量。
+            # 动机:车辆中心在 BEV 上往往是空(LiDAR 打在轮廓/表面),单点采样
+            # 经常采到 0;learnable keypoints 会发散到物体边缘 → 命中真实回波。
+            # 同时与图像分支共享同一组 3D 采样位置,跨模态融合的几何对齐更一致。
+            self._lidar_multi_point = bool(
+                lidar_bev_sampling.get("multi_point_sampling", False)
+            )
 
             # 把 BEV feature channel 投到 embed_dims
             self.lidar_proj = Linear(lidar_channels, embed_dims)
@@ -152,6 +161,7 @@ class DeformableFeatureAggregation(BaseModule):
                 self.mafs_mlp = None
         else:
             self.lidar_bev_sampling = False
+            self._lidar_multi_point = False
             self.lidar_proj = None
             self.lidar_norm = None
             self.lidar_gate = None
@@ -213,7 +223,13 @@ class DeformableFeatureAggregation(BaseModule):
         # 在 output_proj 之前 fuse,这样 image / lidar features 在同一抽象层
         if self.lidar_bev_sampling and metas.get("lidar_bev") is not None:
             lidar_bev = metas["lidar_bev"]  # (B, C, H, W),来自 LiDAR backbone
-            lidar_features = self._sample_lidar_bev(anchor, lidar_bev)
+            # multi_point_sampling=True(F1.kp 实验):复用图像分支已生成的
+            # key_points (B, A, num_pts, 3)。否则退化成 anchor 中心单点 (B, A, 1, 3)。
+            if self._lidar_multi_point:
+                lidar_query_pts = key_points  # (B, A, P, 3)
+            else:
+                lidar_query_pts = anchor[..., :3].unsqueeze(-2)  # (B, A, 1, 3)
+            lidar_features = self._sample_lidar_bev(lidar_query_pts, lidar_bev)
             # 防御:净化 inf/nan,堵住 LayerNorm 把单个 inf 放大成整个向量 nan
             # 的路径(已实测 LN(inf 输入)→ 全 nan)。正常数值不受影响。
             lidar_features = torch.nan_to_num(
@@ -248,28 +264,32 @@ class DeformableFeatureAggregation(BaseModule):
             output = torch.cat([output, instance_feature], dim=-1)
         return output
 
-    def _sample_lidar_bev(self, anchor, lidar_bev):
-        """每个 anchor 的 (x, y) 位置在 BEV feature map 上 bilinear sample.
+    def _sample_lidar_bev(self, query_points, lidar_bev):
+        """每个 query 在 BEV 上采 P 个点 + mean pool 成单向量。
 
         Args:
-            anchor: (B, A, 11) — anchor 11 维 [x, y, z, w, l, h, sin, cos, vx, vy, vz]
+            query_points: (B, A, P, 3) — 每个 query 的 P 个采样点 xyz(LiDAR 坐标系)。
+                P=1: 退化成 anchor 中心单点采样(向后兼容旧 F1 行为)。
+                P>1: F1.kp 多点采样模式,P 通常 = self.num_pts(=13,7 fix +
+                     6 learnable),与图像分支共享同一组 key_points。
             lidar_bev: (B, C, H, W) — LiDAR backbone 输出的 BEV feature
 
         Returns:
-            sampled: (B, A, C) — 每个 anchor 在 BEV 上的采样 feature
+            sampled: (B, A, C) — 每个 query 的聚合 LiDAR 特征
         """
         # anchor xyz 在 LiDAR 坐标系。映射到 BEV grid 归一化坐标 [-1, 1]
         # 注意:LiDAR 点云的 (x, y) 经过 voxelize → SparseEncoder 后,
         # BEV feature map 的 W 维对应 x,H 维对应 y(或反过来,取决于实现)
         # mmdet3d 标准:H = (y_max - y_min) / voxel_y, W = (x_max - x_min) / voxel_x
         # grid_sample 期望 grid[..., 0] = W 方向 = x_norm,grid[..., 1] = H 方向 = y_norm
+        B, A, P = query_points.shape[:3]
         pcr = self._lidar_pcr  # [x_min, y_min, z_min, x_max, y_max, z_max]
-        x = anchor[..., 0]
-        y = anchor[..., 1]
+        x = query_points[..., 0]
+        y = query_points[..., 1]
         x_norm = (x - pcr[0]) / (pcr[3] - pcr[0]) * 2.0 - 1.0
         y_norm = (y - pcr[1]) / (pcr[4] - pcr[1]) * 2.0 - 1.0
-        # grid_sample input: lidar_bev (B, C, H, W); grid (B, A, 1, 2)
-        grid = torch.stack([x_norm, y_norm], dim=-1).unsqueeze(2)
+        # grid_sample input: lidar_bev (B, C, H, W); grid (B, A*P, 1, 2)
+        grid = torch.stack([x_norm, y_norm], dim=-1).reshape(B, A * P, 1, 2)
         sampled = nn.functional.grid_sample(
             lidar_bev.float(),
             grid.float(),
@@ -277,9 +297,16 @@ class DeformableFeatureAggregation(BaseModule):
             padding_mode="zeros",
             align_corners=False,
         )
-        # sampled: (B, C, A, 1) → (B, A, C)
-        sampled = sampled.squeeze(-1).permute(0, 2, 1)
-        return sampled
+        # sampled: (B, C, A*P, 1) → (B, A, P, C) → mean pool → (B, A, C)
+        # mean pool 选择(而非 max / weighted):
+        # - 零新增参数,作为 multi_point 的"裸效果",让 ablation 干净
+        # - max pool 对 BEV 上稀疏回波点更鲁棒,但会丢失分布信息;mean 保留
+        # - 后续若需 weighted,可复用图像分支的 weights 做加权聚合
+        C = sampled.shape[1]
+        sampled = sampled.squeeze(-1).reshape(B, C, A, P).permute(0, 2, 3, 1)
+        if P == 1:
+            return sampled.squeeze(2)  # (B, A, C)
+        return sampled.mean(dim=2)  # (B, A, C)
 
     def _get_weights(self, instance_feature, anchor_embed, metas=None):
         bs, num_anchor = instance_feature.shape[:2]
