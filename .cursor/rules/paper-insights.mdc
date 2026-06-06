@@ -1,0 +1,230 @@
+---
+description: 论文素材沉淀 — 把实验过程中可写入论文的实证发现 / 实验结论 / 工程踩坑都记录到本文件,写论文时直接 grep
+alwaysApply: true
+---
+
+# 论文素材知识库 (Paper Insights)
+
+> 本文件由 AI 在和用户讨论实验/分析的过程中**主动追加**。
+> 写论文时直接 Grep 此文件,组装 Method / Implementation Details / Ablation /
+> Discussion / Limitations 等章节。
+> 与 `lessons-learned.mdc` 的区别:**那边记 AI 的错,这边记可入论文的洞察**。
+
+---
+
+## 维护规则(给 AI 看)
+
+### 触发条件:满足任一,就追加一条
+
+1. **实证发现**:实验数据揭示了一个"非平凡"的现象(不只是"涨/跌 X 点")。
+   例:同一 ckpt 不同推理 setting 表现差异很大、某个超参对结果敏感、某变量
+   学出非预期值。
+2. **实验结论**:通过单变量对比 / 控制变量,得到一个有数字支撑、机制明确的
+   结论。例:"F1→F2 检测涨但跟踪没涨,说明检测质量和关联质量需要解耦优化"。
+3. **工程踩坑(论文级)**:暴露了一个数据/代码/训练 pipeline 上的 bug,且
+   它对论文的 **Implementation Details / Limitations / Reproducibility** 章节
+   有价值。注意:仅 AI 自身踩坑(如调错 API)归 `lessons-learned.mdc`,**只有
+   "影响实验结果可信度"的坑**才归本文件。
+4. **用户明确说**:"这个可以写进论文" / "这点很有意思" / "记下来"。
+
+### 不触发
+- 单纯吐槽 / 心情 / 闲聊
+- 已有同主题条目(此时更新该条目,不新建)
+- 仅是 AI 自己的方法论错误(归 `lessons-learned.mdc`)
+- 还没用数字验证的纯猜测(等数字出来再沉淀)
+
+### 工作流
+1. **识别**:按"触发条件"判断,有疑问时**倾向沉淀**(写论文时素材多 ≫ 少)。
+2. **反思价值**:这点放进论文哪一章节?能撑起多少行?对哪个对照基线有意义?
+3. **直接追加**(无需用户确认):
+   - 在本文件末尾按"条目模板"追加
+   - 编号递增整数 `#1, #2, ...`,不复用、不跳号
+   - 同主题已有条目 → 在该条目内追加新数据/新发现,**不新建**
+4. **回复末尾告知用户**(单行):
+   ```
+   已沉淀论文素材 → paper-insights.mdc #<编号> <一句话标题>
+   ```
+
+### 条目模板
+
+```markdown
+## #<编号> [YYYY-MM-DD] <一句话标题:涨点 / 修了 X / 发现 Y / 反直觉现象>
+
+- **类型**:[实证发现 | 实验结论 | 工程踩坑]
+- **章节归属**:[Method | Implementation Details | Ablation | Discussion | Limitations | Reproducibility]
+- **背景**:这件事在哪个实验、什么阶段、回答什么问题(1-2 行)
+- **观察(数据)**:看到了什么 — **必须有数字/对照表/log 片段**,空话不收
+- **机制解释**:为什么会这样,根因是什么(≤ 100 字)
+- **论文价值**:这点为什么值得写,审稿人会怎么看(1-2 句)
+- **可直接复用的措辞**(可选):一段照抄进论文的中文/英文段落
+- **关联**(可选):commit hash / config 文件 / 实验 work_dir / log 路径
+- **局限 / 待验证**(可选,诚实记录,避免审稿人问倒)
+```
+
+### 类型 ↔ 章节归属(写"章节归属"时参考)
+
+| 类型 | 通常归属 |
+|---|---|
+| 数据揭示了反直觉/非平凡现象 | Ablation 表 + Discussion |
+| 机制级原因解释 + 公式/伪代码 | Method 设计动机 + Discussion |
+| 训练数值稳定性 / 数据 pipeline / DDP 配置 | Implementation Details |
+| 训练失败/局限/未解 | Limitations / Future Work |
+| 复现实验所需的细节(seed / 卡数 / iter scale) | Reproducibility(附录) |
+
+### 写"观察"时的数据规范
+- 至少给一个**对照点**(baseline / before-after / 不同 setting)
+- 给**绝对值 + 相对差**:`AMOTA 0.572 → 0.589 (+0.017)` 比"涨了"有用
+- 关键超参/规模写清楚(R50 / 100 epoch / val split / online inference)
+
+---
+
+## 已沉淀的论文素材
+
+<!-- 新条目追加到此分隔线下方 -->
+
+## #1 [2026-06-05] 数据 pipeline 单位 bug 导致 LiDAR 分支训练时悄悄崩坏 → 修复后融合贡献才被正确量化
+
+- **类型**:工程踩坑
+- **章节归属**:Implementation Details + Reproducibility(可作为正面的"诚实
+  工程反思"段落,审稿人会加分)
+- **背景**:Phase 2 多模态融合(F1/F2/F_full)训练时 loss/grad 看似正常下降,
+  但 LiDAR-only 推理(G2 setting)AMOTA 仅 0.142(对比 CenterPoint 纯 LiDAR
+  0.65+,完全崩),双模态相对相机 baseline 涨幅也低于预期。
+- **观察(数据)**:
+  | ckpt | `pts_middle_encoder.conv_input.1.running_var` | LiDAR 分支可用性 |
+  |---|---|---|
+  | 旧 F1(脏 timestamp) | **NaN** | 完全失效 |
+  | 旧 F_full(脏 timestamp) | **1.81e17**(天文数字) | eval 时输出常数图 |
+  | F1_v2(修复后) | **34.36**(O(1)~O(100) 正常) | 正常工作 |
+
+  另一个铁证:`lidar_gate`(零初始化的 ReZero 标量,F1 sum 融合)在 6 个 DFA
+  decoder 层的最终值:
+  | layer | 旧 F1(脏) | F1_v2(干净) |
+  |---|---|---|
+  | 0 / 7 / 14 / 21 / 28 / 35 | **NaN × 6** | +0.236 / +0.222 / +0.289 / -0.141 / +0.126 / -0.131 |
+
+  对应到 val 指标(R50, 100 epoch):
+  | 模型 | mAP | NDS | AMOTA | IDS |
+  |---|---|---|---|---|
+  | Baseline (cam-only) | 0.4652 | 0.5642 | 0.476 | 356 |
+  | F1 旧(脏 timestamp) | 0.5748 | 0.6451 | 0.5717 | 690 |
+  | **F1_v2(干净 timestamp)** | **0.5830** | 0.6419 | **0.5885** | 838 |
+- **机制解释**:`NuScenes3DDetTrackDataset.get_data_info` 已经把 sample
+  timestamp `/1e6` 转秒,`LoadPointsFromMultiSweepsSparse4D` 又写了 `ts_cur =
+  results["timestamp"] / 1e6` 把秒再除一次,导致 `ts_cur ≈ 1531` 而 `ts_sweep
+  ≈ 1.5e9`(微秒只除一次),`ts_sweep − ts_cur` 无法抵消绝对时间戳 → 点云
+  第 5 维(time offset)被写入 ~1.5e9 的天文数字 → voxel 特征爆炸 →
+  SparseEncoder 第一个 BN running_var 飙到 1e17 → 反传时梯度污染 lidar_gate
+  成 NaN → 下游 `nan_to_num` 兜底成 0 → **LiDAR 分支被静默屏蔽**,模型实际
+  退化成"图像 + 一些 LiDAR 残留噪声"。
+- **论文价值**:这是**单变量受控对比**(只改了一行代码),清楚证明:
+  (1) F1 真实涨幅是 +0.017 AMOTA 而非旧报的 +0.10(后者大半来自图像 +
+      noise);
+  (2) 训练 NaN 监控不够 — loss/grad 都健康,但 BN running buffer 已坏;
+  (3) 多模态 fusion 论文常见 pitfall:gradient 链路某处崩坏会让一整个
+      模态被 silently masked,实验结果看起来还行其实 fusion 是空的。
+  审稿人会喜欢这种诚实的、有数字的"踩坑→修复→重新量化"的反思,这反而
+  比掩盖问题加分。
+- **可直接复用的措辞**(英文,Implementation Details 段落):
+  > In an early version of our pipeline, the per-point relative time offset
+  > used by the multi-sweep LiDAR loader was inadvertently divided by 10⁶
+  > twice, leaving the absolute UNIX timestamp (~10⁹) in the time channel.
+  > While the training loss and gradient norms remained finite due to
+  > downstream `nan_to_num` defenses, the running variance of the first
+  > BatchNorm in the SparseEncoder grew to ~10¹⁷ and the zero-initialized
+  > ReZero gate of every fusion layer diverged to NaN, effectively masking
+  > the LiDAR branch at inference time. We document this pitfall here for
+  > reproducibility and re-report all P2 numbers under the corrected
+  > pipeline (Table N).
+- **关联**:
+  - commit `57441c6` (`fix(dataset): remove duplicate /1e6 ...`)
+  - 文件 `projects/mmdet3d_plugin/datasets/pipelines/loading.py` line 267
+  - 实验 `work_dirs/expF1_lidar_sum_v2`(干净版)vs `work_dirs/expF1_lidar_sum`(脏版)
+- **局限**:F1_v2 是从 iter 2930(干净环境训出来的 ckpt)续训到 14637 的,
+  严格科学地全程 from-scratch 重训会更干净。但 BN running_var 从 1e17 →
+  34 这一事实只能由"修了输入 bug"解释(续训本身不会修好已坏的 BN buffer),
+  所以"修复带来真实 LiDAR 信号"这一**机制结论**仍然成立。
+
+## #2 [2026-06-01] F2 (MAFS) 提升检测但跟踪持平,IDS 反升 — 检测和关联需独立优化
+
+- **类型**:实验结论
+- **章节归属**:Ablation 表 + Discussion(为后续 temporal/association 设计
+  铺垫动机)
+- **背景**:Phase 2 单变量对比 F1(sum 融合)→ F2(MAFS attention 融合),
+  其余完全相同(R50 / 100 epoch / val)。预期 F2 在所有指标上 ≥ F1。
+- **观察(数据)**:
+  | 指标 | F1(sum) | F2(MAFS) | Δ |
+  |---|---|---|---|
+  | mAP ↑ | 0.5748 | **0.5890** | +0.014 ✅ 检测涨 |
+  | NDS ↑ | 0.6451 | **0.6536** | +0.009 ✅ |
+  | Recall ↑ | 0.639 | **0.670** | +0.031 ✅ 检出更多目标 |
+  | AMOTP ↓ | 0.920 | **0.9085** | -0.012 ✅ |
+  | **AMOTA ↑** | **0.5717** | 0.5709 | **-0.001** ⚠️ 持平 |
+  | **IDS ↓** | 690 | 805 | **+115** ❌ |
+  | Frag ↓ | 536 | 655 | +119 ❌ |
+- **机制解释**:MAFS 让每个 query 自适应选择"我这次更信图像还是 LiDAR",
+  单帧检测质量上升(更多目标被检出、定位更准)。但 Sparse4D 的关联机制
+  本质是"query 跨帧传播",MAFS 没改这个机制。新检出的弱信号目标(远处车 /
+  小行人)虽然在该帧被找到,但下一帧 query 的语义连续性不如主流目标 → 跨帧
+  关联跟不上,IDS 上升抵消了 AMOTA 涨幅。**也就是说,改进检测不会自动改进
+  跟踪,关联模块需要独立设计**。
+- **论文价值**:这是个有数字支撑的、干净的反直觉对照,可直接作为"为什么
+  我们要专门设计 temporal/association 组件"的实验动机。比"我们认为关联很
+  重要,所以加了 X 模块"这种空话有力得多。还可以用作消融"逐个加 trick"
+  的转折点:F1→F2(改检测)+ X(改关联)= 涨 AMOTA。
+- **可直接复用的措辞**(中文 Ablation Discussion 段落):
+  > F2 在 mAP 与 Recall 上分别相对 F1 提升 +1.4% 与 +3.1%,但 AMOTA 几乎
+  > 持平(−0.08%),IDS 反而上升 +115。这说明:**自适应模态融合改善了
+  > 单帧检测质量,但 Sparse4D 的 query 跨帧传播机制并不会自动从更多检出
+  > 中受益**;新增的弱信号检出反而带来了更多 ID 切换。这一观察直接驱动
+  > 了我们后续对时序记忆模块(§4.X)的设计。
+- **关联**:`work_dirs/expF1_F2_mafs/` vs `work_dirs/expF1_lidar_sum/`
+- **局限**:F1/F2 都用了脏 timestamp 数据训(见 #1),数字本身待 v2 重训
+  后再确认。但**"检测涨/跟踪平/IDS 升"这个相对趋势**几乎不会因 timestamp
+  fix 而反转(因为是同一份脏数据下的单变量对比)。
+
+## #3 [2026-06-01] F_full(F1+F2+F4 masked-modal)在双模态推理下也涨 — masked-modal 不只是鲁棒性,还是隐式正则
+
+- **类型**:实证发现
+- **章节归属**:Ablation 表 + Discussion(masked-modal 双重作用)
+- **背景**:F4 是 CMT 提出的 masked-modal training:训练时 30% 概率
+  zero-out image,30% zero-out LiDAR,40% 双模态正常。**通常被认为只用于
+  推理时的 graceful degradation**(车上传感器失效不崩),但实测它在**双模态
+  推理**下也提升 AMOTA。
+- **观察(数据)**:F2 → F_full(R50, val, 双模态推理)
+  | 指标 | F2 | F_full | Δ |
+  |---|---|---|---|
+  | mAP | 0.5890 | 0.5873 | -0.002(持平) |
+  | **AMOTA** | 0.5709 | **0.5930** | **+0.022** ✅ |
+  | AMOTP | 0.9085 | **0.863** | -0.046 ✅ |
+  | **IDS** | 805 | **702** | **-103** ✅ |
+  | Frag | 655 | **477** | -178 ✅ |
+  | TID | 1.104 | **0.948** | -0.156 ✅ |
+  | LGD | 1.620 | **1.412** | -0.208 ✅ |
+
+  **关键:检测 mAP 持平,但跟踪指标(AMOTA / IDS / Frag / TID / LGD)全面
+  改善。**
+- **机制解释**:masked-modal 强迫每个模态在另一个模态缺失时也能独立完成
+  任务 → 网络无法学"modality shortcut"(只依赖 LiDAR 给精确深度,图像不
+  做深度) → 每个模态自身的特征质量更高 → 双模态融合时两路都更强。同时
+  时序上,某帧某模态被 mask 等价于"模拟传感器瞬时失效",训练时网络学习
+  在这种扰动下保持 query 的跨帧一致性 → **天然成为时序关联的强正则**,这
+  正好补上了 #2 中"F2 改善检测但 IDS 涨"的空缺。
+- **论文价值**:打破了"masked training 只是鲁棒性 trick"的常见叙述。本工作
+  发现它在 tracking 任务里有**双重作用**:① 鲁棒性(单模态推理仍可用)
+  ② 时序关联正则(双模态推理下 IDS 大降)。这是个有数字支撑的、原 CMT
+  论文(只做检测,不做 tracking)没报告的发现,适合作为**主创新候选 1** 的
+  锚点。
+- **可直接复用的措辞**(英文 Ablation 段落):
+  > Beyond its known role of cross-modal robustness, we observe that
+  > masked-modal training during multi-modal tracking acts as an implicit
+  > temporal regularizer: it reduces IDS by 12.8% and Frag by 27.2% under
+  > full bi-modal inference, while detection mAP stays virtually unchanged
+  > (Table N). We attribute this to the per-step modality masking
+  > effectively simulating transient sensor failures, which forces the
+  > query propagation module to maintain temporal consistency under partial
+  > observations.
+- **关联**:`F2_full.json`(F_full 训练 log),`work_dirs/expF_full/`
+- **局限**:同样基于脏 timestamp 数据,v2 重训后预期 F_full 数字再涨 0.01
+  ~0.02(因 LiDAR 真活了),但**"masked-modal 改善 IDS"这个相对趋势**应在
+  干净数据下更显著。
